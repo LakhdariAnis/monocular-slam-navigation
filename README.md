@@ -15,7 +15,7 @@
 </tr>
 </table>
 
-<video src="docs/media/demo_cli.mp4" width="500" controls autoplay loop muted></video>
+<img src="docs/media/demo_cli.gif" width="500"/><br/>
 <sub>Terminal trigger → car departs autonomously</sub>
 
 ---
