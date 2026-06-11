@@ -9,7 +9,7 @@
 <table>
 <tr>
 <td><img src="docs/media/demo_navigation.gif" width="400"/><br/>
-<sub>Real-world navigation to Station 1 (3× speed — pauses are SLAM processing on Pi 3B)</sub></td>
+<sub>Real-world navigation to Station 1 (3× speed — pauses are due to the low feature count in the room)</sub></td>
 <td><img src="docs/media/demo_dashboard.gif" width="400"/><br/>
 <sub>Web dashboard — same run, showing L-path plan and live position</sub></td>
 </tr>
