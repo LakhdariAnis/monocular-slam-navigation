@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# SLAM build artifacts
+slam/build/
+*.o
+*.a
+*.so
+
+# Large binary files
+data/room_map.osa
+*.osa
+
+# Logs and runtime output
+*.log
+*.csv
+*.h264
+spin_slam_log.txt
+
+# Data files that are regenerated
+data/KeyFrameTrajectory.txt
+
+# Trash
+_trash/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+slam/slam_bridge.py

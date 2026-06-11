@@ -1,0 +1,33 @@
+{
+  "_info": "SLAM coordinates (metres). 'orientation' is required by _plan(). standoff = station_pos + orientation_vector * STANDOFF_DIST (0.30 m).",
+  "_orientations": {
+    "+X Wall": "station on +X wall  |  car approaches from -X  |  standoff is at station_x - 0.30",
+    "-X Wall": "station on -X wall  |  car approaches from +X  |  standoff is at station_x + 0.30",
+    "+Z Wall": "station on +Z wall  |  car approaches from -Z  |  standoff is at station_z - 0.30",
+    "-Z Wall": "station on -Z wall  |  car approaches from +Z  |  standoff is at station_z + 0.30"
+  },
+  "start": {
+    "x": -0.1155,
+    "z": -0.2249,
+    "orientation": "-Z Wall",
+    "_note": "19-reading avg (poses 20-200): x_stdev=0.0010 z_stdev=0.0028"
+  },
+  "station_1": {
+    "x": 0.6900,
+    "z": 0.5521,
+    "orientation": "+X Wall",
+    "_note": "9-reading avg standoff (poses 2190-2270): standoff=( 0.3490,  0.5521) stdev x=0.0011 z=0.0016. station_x = 0.3490 + 0.30 = 0.6490. L-path: drive +Z to elbow, spin RIGHT 90 deg, drive +X to standoff."
+  },
+  "station_2": {
+    "x": -0.0303,
+    "z": 1.5225,
+    "orientation": "+Z Wall",
+    "_note": "9-reading avg standoff (poses 270-350): standoff=(-0.0303, 1.2225) stdev x=0.0030 z=0.0012. station_z = 1.2225 + 0.30 = 1.5225. Car was driving +Z when it stopped here — verify orientation before running."
+  },
+  "station_3": {
+    "x": -0.6900,
+    "z": 1.0021,
+    "orientation": "-X Wall",
+    "_note": "Requires calibration with SLAM"
+  }
+}

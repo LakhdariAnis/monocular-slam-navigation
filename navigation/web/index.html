@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Autonomous Car — Navigation Dashboard</title>
+  <meta name="description" content="Robotics dashboard for the autonomous car navigation system.">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <style>
+    *,
+    *::before,
+    *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --accent: #238636;
+      --accent-blue: #1f6feb;
+      --text-pri: #e6edf3;
+      --text-sec: #8b949e;
+      --warning: #d29922;
+      --danger: #da3633;
+      --radius: 8px;
+      --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    }
+
+    html,
+    body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text-pri);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Offline banner */
+    #offlineBanner {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 9999;
+      background: var(--danger);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      text-align: center;
+      padding: 7px 16px;
+      letter-spacing: 0.4px;
+    }
+
+    body.offline #offlineBanner {
+      display: block;
+    }
+
+    body.offline #mainLayout {
+      filter: brightness(0.55);
+      pointer-events: none;
+    }
+
+    /* Header */
+    #header {
+      height: 48px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    #header .logo {
+      font-size: 17px;
+      color: var(--accent);
+    }
+
+    #header h1 {
+      font-size: 14px;
+      font-weight: 700;
+      flex: 1;
+      letter-spacing: 0.2px;
+    }
+
+    #modeBadge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      padding: 3px 10px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      color: var(--text-sec);
+    }
+
+    #modeBadge.test {
+      border-color: var(--accent-blue);
+      color: var(--accent-blue);
+      background: rgba(31, 111, 235, .12);
+    }
+
+    #modeBadge.real {
+      border-color: var(--danger);
+      color: var(--danger);
+      background: rgba(218, 54, 51, .12);
+    }
+
+    /* Layout */
+    #mainLayout {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+      overflow: hidden;
+    }
+
+    /* Map panel */
+    #mapPanel {
+      background: var(--bg);
+      border-right: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #mapCanvas {
+      display: block;
+      border-radius: var(--radius);
+    }
+
+    #mapLabel {
+      position: absolute;
+      top: 14px;
+      left: 18px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--text-sec);
+    }
+
+    /* Control panel */
+    #controlPanel {
+      background: var(--surface);
+      overflow-y: auto;
+      padding: 14px 14px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+    }
+
+    .card-title {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--text-sec);
+      margin-bottom: 10px;
+    }
+
+    .card-title i {
+      margin-right: 5px;
+    }
+
+    /* Station Grid */
+    #stationGrid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .stn-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--text-pri);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      transition: all 0.2s;
+      text-align: left;
+    }
+
+    .stn-box:hover:not(:disabled) {
+      border-color: var(--accent-blue);
+      background: rgba(31, 111, 235, .1);
+      transform: translateY(-1px);
+    }
+
+    .stn-box:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
+    .stn-box:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .stn-box.docked {
+      border-color: var(--accent);
+      background: rgba(35, 134, 54, .15);
+    }
+
+    .stn-box .stn-icon {
+      font-size: 11px;
+      opacity: 0.5;
+      transition: opacity 0.2s, color 0.2s;
+    }
+
+    .stn-box:hover:not(:disabled) .stn-icon {
+      opacity: 1;
+      color: var(--accent-blue);
+    }
+
+    .stn-box.docked .stn-icon {
+      opacity: 1;
+      color: var(--accent);
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 9px 0;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 13px;
+      width: 100%;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      cursor: pointer;
+      transition: opacity .15s, transform .1s;
+    }
+
+    .btn:active {
+      transform: scale(.97);
+    }
+
+    .btn:disabled {
+      opacity: .35;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    #stopBtn {
+      background: var(--danger);
+      color: #fff;
+    }
+
+    #stopBtn:hover {
+      opacity: .85;
+    }
+
+    /* Phase list */
+    .phase-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .phase-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 12px;
+      color: var(--text-sec);
+      transition: color .2s;
+    }
+
+    .phase-row .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+      flex-shrink: 0;
+      transition: background .25s, box-shadow .25s;
+    }
+
+    .phase-row.active {
+      color: var(--text-pri);
+      font-weight: 700;
+    }
+
+    .phase-row.active .dot {
+      background: var(--accent-blue);
+      box-shadow: 0 0 7px var(--accent-blue);
+    }
+
+    .phase-row[data-phase="departing"].active .dot {
+      background: var(--warning);
+      box-shadow: 0 0 7px var(--warning);
+    }
+
+    .phase-row[data-phase="aligning"].active .dot {
+      background: var(--accent-blue);
+      box-shadow: 0 0 7px var(--accent-blue);
+    }
+
+    .phase-row[data-phase="arrived"].active .dot {
+      background: var(--accent);
+      box-shadow: 0 0 7px var(--accent);
+    }
+
+    /* Debug grid */
+    .debug-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      row-gap: 4px;
+      column-gap: 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .dk {
+      color: var(--text-sec);
+      white-space: nowrap;
+    }
+
+    .dv {
+      color: var(--text-pri);
+      font-weight: 600;
+    }
+
+    .dk.sub {
+      padding-left: 14px;
+      font-size: 11px;
+    }
+
+    .dv.sub {
+      font-size: 11px;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 5px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    /* Tab bar */
+    #tabBar {
+      height: 40px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-end;
+      padding: 0 20px;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .tab-btn {
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-sec);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      padding: 8px 14px;
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-pri);
+    }
+
+    .tab-btn.active {
+      color: var(--accent-blue);
+      border-bottom-color: var(--accent-blue);
+    }
+
+    /* Tab content */
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+      overflow: hidden;
+      align-items: center;
+      /* Center kids horizontally */
+    }
+
+    /* Removed duplicated inline #mainLayout height fix */
+
+    /* Calibration panel */
+    #calPanel {
+      flex: 1;
+      min-height: 0;
+      /* CRITICAL for flex item scrolling! */
+      width: 100%;
+      max-width: 800px;
+      overflow-y: auto;
+      padding: 20px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .cal-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+    }
+
+    .cal-section-title {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--text-sec);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .cal-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .cal-table th {
+      text-align: left;
+      color: var(--text-sec);
+      font-size: 10px;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      padding: 0 0 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .cal-table td {
+      padding: 6px 0;
+      color: var(--text-pri);
+      border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+    }
+
+    .cal-table td:first-child {
+      color: var(--accent-blue);
+      font-weight: 700;
+    }
+
+    .cal-matrix-grid {
+      display: grid;
+      grid-template-columns: repeat(3, auto);
+      gap: 6px 18px;
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text-pri);
+      width: fit-content;
+    }
+
+    .cal-note {
+      font-size: 12px;
+      color: var(--text-sec);
+      line-height: 1.6;
+      margin-bottom: 10px;
+    }
+
+    .cal-code {
+      display: block;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 8px 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--accent);
+    }
+
+    #calDropZone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 24px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    #calDropZone:hover,
+    #calDropZone.drag-over {
+      border-color: var(--accent-blue);
+      background: rgba(31, 111, 235, .06);
+    }
+
+    .cal-photo-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 3px 0;
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+
+    .cal-photo-tag {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      font-weight: 700;
+    }
+
+    .cal-photo-tag.found {
+      background: rgba(35, 134, 54, .2);
+      color: var(--accent);
+    }
+
+    .cal-photo-tag.none {
+      background: rgba(218, 54, 51, .15);
+      color: var(--danger);
+    }
+
+    .cal-result-box {
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .cal-result-box.success {
+      background: rgba(35, 134, 54, .12);
+      border: 1px solid var(--accent);
+    }
+
+    .cal-result-box.warning {
+      background: rgba(210, 153, 34, .12);
+      border: 1px solid var(--warning);
+    }
+
+    .cal-result-box.error {
+      background: rgba(218, 54, 51, .12);
+      border: 1px solid var(--danger);
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="offlineBanner">
+    <i class="fa fa-triangle-exclamation"></i>
+    Server offline — start <code>navigation/web/server.py</code> &nbsp;|&nbsp; Retrying…
+  </div>
+
+  <header id="header">
+    <span class="logo"><i class="fa-solid fa-car-side"></i></span>
+    <h1>Autonomous Car Navigation</h1>
+    <span id="modeBadge" class="test">TEST</span>
+  </header>
+
+  <div id="tabBar">
+    <button class="tab-btn active" data-tab="map" onclick="switchTab('map')">
+      <i class="fa fa-map"></i> Map
+    </button>
+    <button class="tab-btn" data-tab="calibration" onclick="switchTab('calibration')">
+      <i class="fa fa-crosshairs"></i> Calibration
+    </button>
+  </div>
+
+  <div id="tab-map" class="tab-content active">
+    <div id="mainLayout">
+      <div id="mapPanel">
+        <div id="mapLabel">Map View</div>
+        <canvas id="mapCanvas"></canvas>
+      </div>
+
+      <div id="controlPanel">
+
+        <div class="card">
+          <div class="card-title"><i class="fa fa-location-arrow" style="color:var(--accent)"></i>Navigate To</div>
+          <div id="stationGrid"></div>
+          <button class="btn" id="stopBtn" onclick="doStop()">
+            <i class="fa fa-stop" style="font-size:11px;margin-right:4px"></i>EMERGENCY STOP
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-title"><i class="fa fa-list-ol" style="color:var(--accent-blue)"></i>Phase</div>
+          <div class="phase-list">
+            <div class="phase-row" data-phase="departing" id="ph-departing">
+              <span class="dot"></span><span>departing</span>
+            </div>
+            <div class="phase-row" data-phase="phase0" id="ph-phase0">
+              <span class="dot"></span><span>phase0 — spin to face</span>
+            </div>
+            <div class="phase-row" data-phase="phase1" id="ph-phase1">
+              <span class="dot"></span><span>phase1 — drive to elbow</span>
+            </div>
+            <div class="phase-row" data-phase="phase2" id="ph-phase2">
+              <span class="dot"></span><span>phase2 — 90° spin</span>
+            </div>
+            <div class="phase-row" data-phase="phase3" id="ph-phase3">
+              <span class="dot"></span><span>phase3 — dock to standoff</span>
+            </div>
+            <div class="phase-row" data-phase="aligning" id="ph-aligning">
+              <span class="dot"></span><span>aligning <span id="align-status-ui" style="color:var(--text-sec);font-size:11px;margin-left:4px">—</span></span>
+            </div>
+            <div class="phase-row" data-phase="arrived" id="ph-arrived">
+              <span class="dot"></span><span>arrived</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title"><i class="fa fa-terminal" style="color:var(--warning)"></i>Debug</div>
+          <div class="debug-grid">
+            <span class="dk">SLAM</span><span class="dv" style="color:var(--text-sec)"></span>
+            <span class="dk sub">x</span> <span class="dv sub" id="dbg-x">—</span>
+            <span class="dk sub">z</span> <span class="dv sub" id="dbg-z">—</span>
+            <span class="dk">IMU</span><span class="dv" style="color:var(--text-sec)"></span>
+            <span class="dk sub">hdg</span><span class="dv sub" id="dbg-hdg">—</span>
+            <span class="dk">Docked at</span><span class="dv" id="dbg-docked">—</span>
+            <span class="dk">Phase</span> <span class="dv" id="dbg-phase">—</span>
+            <span class="dk">Mode</span> <span class="dv" id="dbg-mode">—</span>
+            <span class="dk">Running</span> <span class="dv" id="dbg-running">—</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-calibration" class="tab-content">
+    <div id="calPanel">
+
+      <div class="cal-section">
+        <div class="cal-section-title">
+          <i class="fa fa-circle-info" style="color:var(--accent-blue)"></i>
+          Transform Overview
+        </div>
+        <div id="calOverview" class="debug-grid">
+          <span class="dk">Status</span><span class="dv" id="cal-status">loading…</span>
+          <span class="dk">Source</span><span class="dv" id="cal-source">—</span>
+          <span class="dk">Markers used</span><span class="dv" id="cal-markers-used">—</span>
+          <span class="dk">Scale</span><span class="dv" id="cal-scale">—</span>
+          <span class="dk">Validation error</span><span class="dv" id="cal-error">—</span>
+        </div>
+      </div>
+
+      <div class="cal-section">
+        <div class="cal-section-title">
+          <i class="fa fa-table" style="color:var(--accent)"></i>
+          Marker Positions
+        </div>
+        <table id="calMarkerTable" class="cal-table">
+          <thead>
+            <tr>
+              <th>Marker</th>
+              <th>SLAM x</th>
+              <th>SLAM z</th>
+              <th>Room X (cm)</th>
+              <th>Room Y (cm)</th>
+            </tr>
+          </thead>
+          <tbody id="calMarkerBody">
+            <tr>
+              <td colspan="5" style="color:var(--text-sec);text-align:center">loading…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="cal-section">
+        <div class="cal-section-title">
+          <i class="fa fa-matrix" style="color:var(--warning)"></i>
+          Transform Matrix (3×3)
+        </div>
+        <div id="calMatrix" class="cal-matrix-grid">loading…</div>
+      </div>
+
+      <div class="cal-section">
+        <div class="cal-section-title">
+          <i class="fa fa-upload" style="color:var(--accent-blue)"></i>
+          Run New Calibration
+        </div>
+        <p class="cal-note">
+          Place ArUco markers M0, M4, M6, M7 at known room positions. Take 4–6 photos from different angles, each
+          showing at least 2 markers. Upload them below.
+        </p>
+
+        <div id="calDropZone">
+          <i class="fa fa-images" style="font-size:22px;color:var(--text-sec);margin-bottom:8px"></i>
+          <div style="color:var(--text-sec);font-size:12px">Drop photos here or click to browse</div>
+          <div style="color:var(--text-sec);font-size:11px;margin-top:4px">JPEG or PNG — 4 to 6 photos recommended</div>
+          <input type="file" id="calFileInput" multiple accept="image/jpeg,image/png" style="display:none">
+        </div>
+
+        <div id="calFileList" style="display:none">
+          <div class="cal-section-title" style="margin-top:12px">
+            <i class="fa fa-file-image" style="color:var(--text-sec)"></i>
+            Selected photos
+          </div>
+          <div id="calFileNames" style="font-family:var(--mono);font-size:12px;color:var(--text-sec);line-height:1.8">
+          </div>
+        </div>
+
+        <button id="calRunBtn" class="btn" style="margin-top:14px;background:var(--accent-blue);color:#fff;display:none"
+          onclick="runCalibration()">
+          <i class="fa fa-play" style="font-size:11px;margin-right:5px"></i>RUN CALIBRATION
+        </button>
+
+        <div id="calProgress" style="display:none;margin-top:12px">
+          <div style="color:var(--text-sec);font-size:12px">
+            <i class="fa fa-spinner fa-spin" style="margin-right:6px"></i>Processing photos…
+          </div>
+        </div>
+
+        <div id="calUploadResult" style="display:none;margin-top:14px"></div>
+      </div>
+
+      <div class="cal-section">
+        <div class="cal-section-title">
+          <i class="fa fa-circle-info" style="color:var(--text-sec)"></i>
+          CLI alternative
+        </div>
+        <p class="cal-note">
+          Calibration can also be run from the terminal:
+        </p>
+        <code class="cal-code">python3 navigation/tools/calibrate_cli.py photo1.jpg photo2.jpg ...</code>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+
+    // ── Tab switching ─────────────────────────────────────────────────────────────
+    function switchTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + name));
+      if (name === 'calibration') loadCalibration();
+    }
+
+    // ── Calibration data ──────────────────────────────────────────────────────────
+    async function loadCalibration() {
+      try {
+        const d = await (await fetch('/calibration')).json();
+
+        if (d.error) {
+          document.getElementById('cal-status').textContent = '⚠ ' + d.error;
+          document.getElementById('cal-status').style.color = 'var(--warning)';
+          return;
+        }
+
+        // Overview
+        const err = d.validation_error_cm ?? null;
+        const errColor = err === null ? 'var(--text-sec)' : err < 20 ? 'var(--accent)' : err < 40 ? 'var(--warning)' : 'var(--danger)';
+        const errText = err !== null ? `${err.toFixed(1)} cm ${err < 20 ? '✓' : err < 40 ? '⚠ high' : '✗ too high'}` : '—';
+
+        document.getElementById('cal-status').textContent = '✓ calibration.json loaded';
+        document.getElementById('cal-status').style.color = 'var(--accent)';
+        document.getElementById('cal-source').textContent = d.transform_source ?? '—';
+        document.getElementById('cal-markers-used').textContent = Array.isArray(d.markers_used) ? d.markers_used.map(m => 'M' + m).join(', ') : '—';
+        document.getElementById('cal-scale').textContent = d.scale_cm_per_slam_unit ? d.scale_cm_per_slam_unit.toFixed(2) + ' cm / SLAM unit' : '—';
+        document.getElementById('cal-error').textContent = errText;
+        document.getElementById('cal-error').style.color = errColor;
+
+        // Marker table
+        const tbody = document.getElementById('calMarkerBody');
+        tbody.innerHTML = '';
+        const realCm = d.marker_positions_real_cm ?? {};
+        const slamPos = d.marker_positions_slam ?? {};
+        const ids = Object.keys(realCm).sort((a, b) => parseInt(a) - parseInt(b));
+        if (ids.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" style="color:var(--text-sec);text-align:center">No marker data</td></tr>';
+        } else {
+          for (const id of ids) {
+            const [rx, ry] = realCm[id] ?? [0, 0];
+            const [sx, sz] = slamPos[id] ?? [0, 0];
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td>M${id}</td>
+              <td>${(+sx).toFixed(4)}</td>
+              <td>${(+sz).toFixed(4)}</td>
+              <td>${(+rx).toFixed(1)}</td>
+              <td>${(+ry).toFixed(1)}</td>
+            `;
+            tbody.appendChild(tr);
+          }
+        }
+
+        // Matrix
+        const matDiv = document.getElementById('calMatrix');
+        matDiv.innerHTML = '';
+        const mat = d.transform_matrix ?? [];
+        if (mat.length === 3) {
+          for (const row of mat) {
+            for (const val of row) {
+              const cell = document.createElement('span');
+              cell.textContent = (+val).toFixed(4);
+              cell.style.color = 'var(--text-pri)';
+              matDiv.appendChild(cell);
+            }
+          }
+        } else {
+          matDiv.textContent = 'No matrix data';
+          matDiv.style.color = 'var(--text-sec)';
+        }
+
+      } catch (e) {
+        document.getElementById('cal-status').textContent = '✗ Failed to load /calibration';
+        document.getElementById('cal-status').style.color = 'var(--danger)';
+      }
+    }
+
+    // ── Constants ────────────────────────────────────────────────────────────────
+    const PAD = 40;
+    const STATION_R = 8;
+    const CAR_R = 10;
+    const ARROW_LEN = 22;
+    const PHASES = ['departing', 'phase0', 'phase1', 'phase2', 'phase3', 'aligning', 'arrived'];
+
+    // ── State ────────────────────────────────────────────────────────────────────
+    let stations = {};
+    let state = {
+      pos: { x: 0, z: 0 }, heading: 0, phase: 'idle', docked_at: null,
+      mode: 'test', running: false, path: null
+    };
+    let offline = false;
+    let retryHandle = null;
+
+    // ── Canvas ───────────────────────────────────────────────────────────────────
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function resizeCanvas() {
+      const p = document.getElementById('mapPanel');
+      canvas.width = Math.max(p.clientWidth - 24, 100);
+      canvas.height = Math.max(p.clientHeight - 24, 100);
+      draw();
+    }
+
+    // ── Coordinate transform ─────────────────────────────────────────────────────
+    const COORD_SCALE = 4;   // 1 SLAM unit = 4 real-world units
+
+    function buildTransform() {
+      const pts = [];
+      Object.values(stations).forEach(s => {
+        if (typeof s.x === 'number') pts.push([s.x * COORD_SCALE, s.z * COORD_SCALE]);
+      });
+      if (pts.length === 0) pts.push([-2.8, -2], [3.6, 6.8]);
+
+      let xMin = pts[0][0], xMax = pts[0][0], zMin = pts[0][1], zMax = pts[0][1];
+      pts.forEach(([x, z]) => {
+        if (x < xMin) xMin = x; if (x > xMax) xMax = x;
+        if (z < zMin) zMin = z; if (z > zMax) zMax = z;
+      });
+
+      const W = canvas.width, H = canvas.height;
+      const worldW = xMax - xMin || 1, worldH = zMax - zMin || 1;
+      const scale = Math.min((W - 2 * PAD) / worldW, (H - 2 * PAD) / worldH);
+      const drawW = worldW * scale, drawH = worldH * scale;
+      const offX = (W - drawW) / 2, offZ = (H - drawH) / 2;
+
+      return {
+        wx: x => offX + (x * COORD_SCALE - xMin) * scale,
+        wz: z => H - offZ - (z * COORD_SCALE - zMin) * scale
+      };
+    }
+
+    // ── Draw ─────────────────────────────────────────────────────────────────────
+    function draw() {
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      // Background
+      ctx.fillStyle = '#0d1117';
+      ctx.fillRect(0, 0, W, H);
+
+      const { wx, wz } = buildTransform();
+
+      // 1. Room rectangle
+      const room = buildRoomRect();
+      if (room.left !== null && room.right !== null && room.top !== null && room.bottom !== null) {
+        const rx = wx(room.left), rz = wz(room.top);
+        const rw = wx(room.right) - wx(room.left), rh = wz(room.bottom) - wz(room.top);
+        ctx.fillStyle = '#161b22'; ctx.fillRect(rx, rz, rw, rh);
+        ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]); ctx.strokeRect(rx, rz, rw, rh); ctx.setLineDash([]);
+      }
+
+      // 2. Stations
+      ctx.font = '500 10px system-ui'; ctx.textAlign = 'center';
+      for (const [name, s] of Object.entries(stations)) {
+        if (name.startsWith('_') || typeof s.x !== 'number') continue;
+        const px = wx(s.x), pz = wz(s.z);
+        ctx.beginPath(); ctx.arc(px, pz, STATION_R, 0, Math.PI * 2);
+        ctx.fillStyle = '#1f6feb'; ctx.fill();
+        ctx.strokeStyle = '#e6edf3'; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.fillStyle = '#8b949e';
+        ctx.fillText(name, px, pz + STATION_R + 12);
+      }
+
+      // 3. Planned path
+      if (state.path) {
+        const p = state.path;
+        const sx = wx(p.start[0]), sz = wz(p.start[1]);
+        const tx = wx(p.target[0]), tz = wz(p.target[1]);
+        const stx = wx(p.standoff[0]), stz = wz(p.standoff[1]);
+
+        if (p.is_straight) {
+          ctx.beginPath(); ctx.moveTo(sx, sz); ctx.lineTo(stx, stz);
+          ctx.strokeStyle = '#238636'; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.stroke();
+        } else {
+          const ex = wx(p.elbow[0]), ez = wz(p.elbow[1]);
+          // Dashed grey: start → elbow
+          ctx.beginPath(); ctx.moveTo(sx, sz); ctx.lineTo(ex, ez);
+          ctx.strokeStyle = '#8b949e'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.stroke();
+          // Dashed grey: elbow → standoff
+          ctx.beginPath(); ctx.moveTo(ex, ez); ctx.lineTo(stx, stz);
+          ctx.setLineDash([5, 4]); ctx.stroke();
+          // Solid green: standoff → target
+          ctx.beginPath(); ctx.moveTo(stx, stz); ctx.lineTo(tx, tz);
+          ctx.strokeStyle = '#238636'; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.stroke();
+          // Elbow dot
+          ctx.beginPath(); ctx.arc(ex, ez, 4, 0, Math.PI * 2);
+          ctx.fillStyle = '#d29922'; ctx.fill();
+        }
+        ctx.setLineDash([]);
+      }
+
+      // 4. Car
+      const cx = wx(state.pos.x), cz = wz(state.pos.z);
+      // heading 0=north(+Z)=canvas-up, 90=east(+X)=canvas-right
+      const hdgRad = (state.heading * Math.PI / 180) - Math.PI / 2;
+
+      ctx.beginPath(); ctx.arc(cx, cz, CAR_R, 0, Math.PI * 2);
+      ctx.fillStyle = '#e6edf3'; ctx.fill();
+      ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1.5; ctx.stroke();
+
+      // Arrow
+      const ax = cx + Math.cos(hdgRad) * ARROW_LEN, az = cz + Math.sin(hdgRad) * ARROW_LEN;
+      ctx.beginPath(); ctx.moveTo(cx, cz); ctx.lineTo(ax, az);
+      ctx.strokeStyle = '#238636'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.stroke();
+      ctx.lineCap = 'butt';
+
+      // Label
+      ctx.fillStyle = '#8b949e'; ctx.font = '500 10px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('car', cx, cz + CAR_R + 12);
+    }
+
+    // ── UI update ────────────────────────────────────────────────────────────────
+    function updateUI() {
+      // Mode badge
+      const mb = document.getElementById('modeBadge');
+      mb.textContent = (state.mode || 'test').toUpperCase();
+      mb.className = state.mode || 'test';
+
+      // Phases
+      const phase = state.phase || 'idle';
+      PHASES.forEach(label => {
+        const row = document.getElementById('ph-' + label);
+        if (row) row.classList.toggle('active', label === phase);
+      });
+
+      // Debug
+      document.getElementById('dbg-x').textContent = state.pos.x.toFixed(4);
+      document.getElementById('dbg-z').textContent = state.pos.z.toFixed(4);
+      document.getElementById('dbg-hdg').textContent = state.heading.toFixed(1) + '°';
+      document.getElementById('dbg-docked').textContent = state.docked_at || '—';
+      document.getElementById('dbg-phase').textContent = phase;
+
+      document.getElementById('dbg-mode').textContent = state.mode || '—';
+      document.getElementById('dbg-running').textContent = state.running ? 'yes' : 'no';
+
+      // Align status
+      const align_ui = document.getElementById('align-status-ui');
+      if (align_ui) {
+        if (state.align_status) {
+           align_ui.textContent = '— ' + state.align_status;
+        } else {
+           align_ui.textContent = '';
+        }
+      }
+
+
+      // Station buttons state
+      document.querySelectorAll('.stn-box').forEach(btn => {
+        btn.disabled = !!state.running;
+        const name = btn.getAttribute('data-target');
+        btn.classList.toggle('docked', name === state.docked_at);
+
+        // Change icon based on docking state
+        const icon = btn.querySelector('.stn-icon');
+        if (icon) {
+          icon.className = name === state.docked_at ? 'fa fa-solid fa-map-pin stn-icon' : 'fa fa-solid fa-location-arrow stn-icon';
+        }
+      });
+    }
+
+    // ── Offline ──────────────────────────────────────────────────────────────────
+    function setOffline(val) {
+      offline = val;
+      document.body.classList.toggle('offline', val);
+    }
+
+    // ── API ──────────────────────────────────────────────────────────────────────
+    async function pollState() {
+      try {
+        const r = await fetch('/state');
+        if (!r.ok) throw new Error('not ok');
+        state = await r.json();
+        setOffline(false);
+        updateUI();
+        draw();
+      } catch (e) {
+        setOffline(true);
+        if (!retryHandle) {
+          retryHandle = setTimeout(() => { retryHandle = null; pollState(); }, 2000);
+        }
+      }
+    }
+
+    // ── Room rectangle from wall orientations ────────────────────────────────────
+    function buildRoomRect() {
+      let left = null, right = null, top = null, bottom = null;
+      for (const s of Object.values(stations)) {
+        if (s.orientation === '-X Wall') left = s.x;
+        if (s.orientation === '+X Wall') right = s.x;
+        if (s.orientation === '+Z Wall') top = s.z;
+        if (s.orientation === '-Z Wall') bottom = s.z;
+      }
+      return { left, right, top, bottom };
+    }
+
+    async function loadStations() {
+      try {
+        const d = await (await fetch('/stations')).json();
+        stations = {};
+        for (const [k, v] of Object.entries(d)) {
+          if (!k.startsWith('_') && typeof v === 'object' && typeof v.x === 'number')
+            stations[k] = v;
+        }
+        buildStationBoxes();
+      } catch (e) { console.warn('stations failed', e); }
+    }
+
+    function buildStationBoxes() {
+      const container = document.getElementById('stationGrid');
+      container.innerHTML = '';
+
+      for (const name of Object.keys(stations)) {
+        const btn = document.createElement('button');
+        btn.className = 'stn-box';
+        btn.setAttribute('data-target', name);
+        btn.onclick = () => doGo(name);
+
+        btn.innerHTML = `
+      <span>${name}</span>
+      <i class="fa fa-solid fa-location-arrow stn-icon"></i>
+    `;
+        container.appendChild(btn);
+      }
+    }
+
+    async function doGo(target) {
+      if (!target) return;
+      document.querySelectorAll('.stn-box').forEach(b => b.disabled = true);
+      try {
+        const r = await fetch('/go', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target })
+        });
+        const j = await r.json();
+        if (j.status === 'busy') console.log('[go] busy');
+      } catch (e) { console.error('[go] failed', e); }
+    }
+
+    async function doStop() {
+      try { await fetch('/stop', { method: 'POST' }); } catch (e) { }
+    }
+
+    // ── Boot ─────────────────────────────────────────────────────────────────────
+    async function init() {
+      resizeCanvas();
+      window.addEventListener('resize', resizeCanvas);
+      await Promise.allSettled([loadStations()]);
+      draw();
+      setInterval(pollState, 200);
+      pollState();
+    }
+
+    // ── Calibration upload ────────────────────────────────────────────────────────
+    let calFiles = [];
+
+    (function initCalDrop() {
+      const zone = document.getElementById('calDropZone');
+      const input = document.getElementById('calFileInput');
+      if (!zone || !input) return;
+
+      zone.addEventListener('click', () => input.click());
+
+      zone.addEventListener('dragover', e => {
+        e.preventDefault();
+        zone.classList.add('drag-over');
+      });
+
+      zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+
+      zone.addEventListener('drop', e => {
+        e.preventDefault();
+        zone.classList.remove('drag-over');
+        setCalFiles([...e.dataTransfer.files].filter(f => f.type.startsWith('image/')));
+      });
+
+      input.addEventListener('change', () => {
+        setCalFiles([...input.files]);
+      });
+    })();
+
+    function setCalFiles(files) {
+      calFiles = files;
+      const listDiv = document.getElementById('calFileList');
+      const namesDiv = document.getElementById('calFileNames');
+      const runBtn = document.getElementById('calRunBtn');
+      const resultDiv = document.getElementById('calUploadResult');
+
+      if (files.length === 0) {
+        listDiv.style.display = 'none';
+        runBtn.style.display = 'none';
+        return;
+      }
+
+      namesDiv.innerHTML = files.map(f =>
+        `<div class="cal-photo-row"><i class="fa fa-image" style="color:var(--text-sec)"></i>${f.name} <span style="color:var(--text-sec)">(${(f.size / 1024).toFixed(0)} KB)</span></div>`
+      ).join('');
+
+      listDiv.style.display = 'block';
+      runBtn.style.display = 'block';
+      resultDiv.style.display = 'none';
+      resultDiv.innerHTML = '';
+    }
+
+    async function runCalibration() {
+      if (calFiles.length === 0) return;
+
+      const runBtn = document.getElementById('calRunBtn');
+      const progress = document.getElementById('calProgress');
+      const resultDiv = document.getElementById('calUploadResult');
+
+      runBtn.disabled = true;
+      progress.style.display = 'block';
+      resultDiv.style.display = 'none';
+      resultDiv.innerHTML = '';
+
+      try {
+        const fd = new FormData();
+        for (const f of calFiles) fd.append('photos', f);
+
+        const r = await fetch('/calibrate', { method: 'POST', body: fd });
+        const d = await r.json();
+
+        progress.style.display = 'none';
+        resultDiv.style.display = 'block';
+
+        if (!d.success) {
+          resultDiv.innerHTML = `<div class="cal-result-box error"><b>Failed:</b> ${d.error || 'Unknown error'}</div>`;
+          return;
+        }
+
+        // Per-photo results
+        const photoRows = (d.per_photo || []).map(p => {
+          if (p.error) return `<div class="cal-photo-row"><i class="fa fa-xmark" style="color:var(--danger)"></i>${p.filename} <span class="cal-photo-tag none">error</span></div>`;
+          const tag = p.markers.length > 0
+            ? `<span class="cal-photo-tag found">${p.markers.join(' ')}</span>`
+            : `<span class="cal-photo-tag none">none</span>`;
+          return `<div class="cal-photo-row"><i class="fa fa-image" style="color:var(--text-sec)"></i>${p.filename} ${tag}</div>`;
+        }).join('');
+
+        const err = d.validation_error_cm ?? 999;
+        const errColor = err < 20 ? 'var(--accent)' : err < 40 ? 'var(--warning)' : 'var(--danger)';
+        const boxClass = err < 20 ? 'success' : err < 40 ? 'warning' : 'error';
+        const savedMsg = d.saved ? '<b style="color:var(--accent)">✓ Saved to calibration.json</b>' : `<b style="color:var(--warning)">⚠ Not saved — error too high (≥40cm)</b>`;
+
+        resultDiv.innerHTML = `
+          <div style="margin-bottom:10px;font-size:11px;color:var(--text-sec);font-family:var(--mono)">${photoRows}</div>
+          <div class="cal-result-box ${boxClass}">
+            ${savedMsg}<br>
+            Validation error: <b style="color:${errColor}">${err.toFixed(1)} cm</b><br>
+            Markers used: ${(d.markers_used || []).map(m => 'M' + m).join(', ')}<br>
+            Scale: ${(d.scale_cm_per_slam_unit || 0).toFixed(2)} cm / SLAM unit
+          </div>
+        `;
+
+        // Reload the static display if saved
+        if (d.saved) setTimeout(loadCalibration, 500);
+
+      } catch (e) {
+        progress.style.display = 'none';
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = `<div class="cal-result-box error"><b>Request failed:</b> ${e.message}</div>`;
+      } finally {
+        runBtn.disabled = false;
+      }
+    }
+
+    window.addEventListener('load', init);
+  </script>
+</body>
+
+</html>
