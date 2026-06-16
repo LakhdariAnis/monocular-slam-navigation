@@ -1,22 +1,20 @@
 from flask import Flask, render_template_string, request, jsonify
 import RPi.GPIO as GPIO
 
-# ── Pin definitions ───────────────────────────────────────────
-# Front side - corrected to match your doc
-ENA = 12;  IN1 = 17; IN2 = 27    # FR  (Board 32, 11, 13)
-ENB = 13;  IN3 = 22; IN4 = 23    # FL  (Board 33, 15, 16)
-# Back side - corrected to match your doc
-ENA2 = 18; IN5 = 24; IN6 = 25   # RL  (Board 12, 18, 22)
-ENB2 = 19; IN7 = 5;  IN8 = 6    # RR  (Board 35, 29, 31)
+ENA = 12; IN1 = 23; IN2 = 22    # FR
+ENB = 13; IN3 = 27; IN4 = 17    # FL
+ENA2 = 18; IN5 = 6;  IN6 = 5   # RL
+ENB2 = 19; IN7 = 24; IN8 = 25  # RR
+
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 all_pins = [ENA,IN1,IN2,IN3,IN4,ENB,ENA2,IN5,IN6,IN7,IN8,ENB2]
 GPIO.setup(all_pins, GPIO.OUT, initial=GPIO.LOW)
 
-pwm_fr = GPIO.PWM(ENA,  1000); pwm_fr.start(0)
-pwm_fl = GPIO.PWM(ENB,  1000); pwm_fl.start(0)
-pwm_rl = GPIO.PWM(ENA2, 1000); pwm_rl.start(0)
-pwm_rr = GPIO.PWM(ENB2, 1000); pwm_rr.start(0)
+pwm_fr = GPIO.PWM(ENA,  5000); pwm_fr.start(0)   # CHANGED: 1000 -> 5000
+pwm_fl = GPIO.PWM(ENB,  5000); pwm_fl.start(0)   # CHANGED: 1000 -> 5000
+pwm_rl = GPIO.PWM(ENA2, 5000); pwm_rl.start(0)   # CHANGED: 1000 -> 5000
+pwm_rr = GPIO.PWM(ENB2, 5000); pwm_rr.start(0)   # CHANGED: 1000 -> 5000
 
 def set_motors(fr_f, fr_b, fl_f, fl_b, rl_f, rl_b, rr_f, rr_b,
                spd_fr=100, spd_fl=100, spd_rl=100, spd_rr=100):
@@ -30,26 +28,25 @@ def set_motors(fr_f, fr_b, fl_f, fl_b, rl_f, rl_b, rr_f, rr_b,
     GPIO.output(IN7, rr_f); GPIO.output(IN8, rr_b)
 
 def apply(w, a, s, d, inner=30):
-    # columns: FR      FL      RL      RR
     if w and d:
-        set_motors(0,1,  1,0,  1,0,  0,1,
-                   spd_fr=inner, spd_fl=100, spd_rl=100, spd_rr=inner)
+        set_motors(1,0,  1,0,  1,0,  1,0,
+                   spd_fr=100, spd_fl=inner, spd_rl=inner, spd_rr=100)  # FIXED
     elif w and a:
-        set_motors(1,0,  0,1,  0,1,  1,0,
-                   spd_fr=100, spd_fl=inner, spd_rl=inner, spd_rr=100)
+        set_motors(1,0,  1,0,  1,0,  1,0,
+                   spd_fr=inner, spd_fl=100, spd_rl=100, spd_rr=inner)  # FIXED
     elif s and d:
-        set_motors(1,0,  0,1,  0,1,  1,0,
-                   spd_fr=inner, spd_fl=100, spd_rl=100, spd_rr=inner)
+        set_motors(0,1,  0,1,  0,1,  0,1,
+                   spd_fr=100, spd_fl=inner, spd_rl=inner, spd_rr=100)  # FIXED
     elif s and a:
-        set_motors(0,1,  1,0,  1,0,  0,1,
-                   spd_fr=100, spd_fl=inner, spd_rl=inner, spd_rr=100)
+        set_motors(0,1,  0,1,  0,1,  0,1,
+                   spd_fr=inner, spd_fl=100, spd_rl=100, spd_rr=inner)  # FIXED
     elif w:
         set_motors(1,0,  1,0,  1,0,  1,0)
     elif s:
         set_motors(0,1,  0,1,  0,1,  0,1)
-    elif a:
-        set_motors(1,0,  0,1,  0,1,  1,0)
     elif d:
+        set_motors(1,0,  0,1,  0,1,  1,0)
+    elif a:
         set_motors(0,1,  1,0,  1,0,  0,1)
     else:
         set_motors(0,0,  0,0,  0,0,  0,0,
@@ -206,7 +203,7 @@ def drive():
 
 if __name__ == '__main__':
     try:
-        print("Open browser at http://YOUR_PI_IP:5000")
+        print("Open browser at http://192.168.20.191:5000")
         app.run(host='0.0.0.0', port=5000, threaded=True)
     finally:
         set_motors(0,0, 0,0, 0,0, 0,0,
