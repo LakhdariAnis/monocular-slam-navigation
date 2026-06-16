@@ -39,3 +39,4 @@ Thumbs.db
 .idea/
 *.swp
 slam/slam_bridge.py
+report.html
