@@ -40,3 +40,19 @@ Thumbs.db
 *.swp
 slam/slam_bridge.py
 report.html
+# Node / Frontend
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Frontend build
+monitoring/dashboard/frontend/dist/
+monitoring/dashboard/frontend/build/
+
+# Env
+.env
+.env.local
+.env.*.local
