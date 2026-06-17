@@ -20,12 +20,13 @@
     const MAX_CHART_POINTS = 200;
 
     const ANOMALY_TYPES = [
-      { key: "tracking_loss",    label: "Tracking Loss" },
-      { key: "motor_stall",      label: "Motor Stall" },
-      { key: "position_jump",    label: "Position Jump" },
-      { key: "phase_timeout",    label: "Phase Timeout" },
-      { key: "imu_static_drift", label: "IMU Static Drift" },
-      { key: "trajectory_drift", label: "Trajectory Drift" },
+      { key: "tracking_loss",    label: "Tracking Loss",     color: "#ff6b6b" },
+      { key: "motor_stall",      label: "Motor Stall",       color: "#7dd3fc" },
+      { key: "position_jump",    label: "Position Jump",     color: "#7dd3fc" },
+      { key: "phase_timeout",    label: "Phase Timeout",     color: "#7dd3fc" },
+      { key: "imu_static_drift", label: "IMU Static Drift",  color: "#7dd3fc" },
+      { key: "trajectory_drift", label: "Trajectory Drift",  color: "#7dd3fc" },
+      { key: "slam_low_feature", label: "Low Feature Room",  color: "#facc15" },
     ];
 
     const PHASE_COLORS = {
@@ -211,7 +212,7 @@ function computeElbow(fromName, toName) {
     }
 
     // ── Position Path Chart ──
-    function PositionPathChart({ historyData, liveSlam }) {
+    function PositionPathChart({ historyData, liveSlam, slamRateStatus }) {
       const [points, setPoints] = useState([]);
 
       // Load history once
@@ -242,13 +243,20 @@ function computeElbow(fromName, toName) {
         if (cx == null || cy == null) return null;
         const isLast = index === points.length - 1;
         const opacity = 0.3 + 0.7 * (index / Math.max(points.length - 1, 1));
+        const degraded = slamRateStatus && slamRateStatus !== "ok";
+        const normalColor = "#7dd3fc";
+        const lastColor = "#c8eaff";
+        const degradedColor = "#facc15";
+        const dotColor = isLast
+          ? (degraded ? degradedColor : lastColor)
+          : (degraded ? degradedColor : normalColor);
         return (
           <circle
             key={index}
             cx={cx}
             cy={cy}
             r={isLast ? 5 : 1.5}
-            fill={isLast ? "#c8eaff" : "#7dd3fc"}
+            fill={dotColor}
             fillOpacity={opacity}
             filter={isLast ? "url(#glowFilter)" : undefined}
           />
@@ -305,7 +313,7 @@ function computeElbow(fromName, toName) {
                 />
                 <Scatter
                   data={points}
-                  line={{ stroke: "#7dd3fc", strokeWidth: 2, filter: "drop-shadow(0 0 6px rgba(125,211,252,0.6))" }}
+                  line={{ stroke: (slamRateStatus && slamRateStatus !== "ok") ? "#facc15" : "#7dd3fc", strokeWidth: 2, filter: "drop-shadow(0 0 6px rgba(125,211,252,0.6))" }}
                   lineType="joint"
                   shape={renderDot}
                   isAnimationActive={false}
@@ -482,6 +490,143 @@ function computeElbow(fromName, toName) {
               </LineChart>
             </ResponsiveContainer>
           </div>
+        </div>
+      );
+    }
+
+    // ── Slam Rate Panel ──
+    function SlamRatePanel({ slamLowFeatureActive }) {
+      const [rateData, setRateData] = useState({ msgs_per_sec: 0, status: "critical" });
+      const [quality, setQuality] = useState(50);
+
+      useEffect(() => {
+        let alive = true;
+        const poll = () => {
+          fetch(`${API_BASE}/live/slam_rate`)
+            .then(r => r.json())
+            .then(d => { if (alive) setRateData(d); })
+            .catch(() => {});
+        };
+        poll();
+        const id = setInterval(poll, 500);
+        return () => { alive = false; clearInterval(id); };
+      }, []);
+
+      // Publish on first activation when toggle turns ON
+      const prevActiveRef = useRef(slamLowFeatureActive);
+      useEffect(() => {
+        if (slamLowFeatureActive && !prevActiveRef.current) {
+          const decay = 0.980 + (quality / 100) * (1.000 - 0.980);
+          const recover = 1.005 + (quality / 100) * (1.050 - 1.005);
+          fetch(`${API_BASE}/api/publish`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              topic: "car/mock/slam_params",
+              payload: { decay: parseFloat(decay.toFixed(4)), recover: parseFloat(recover.toFixed(4)) },
+            }),
+          }).catch(() => {});
+        }
+        prevActiveRef.current = slamLowFeatureActive;
+      }, [slamLowFeatureActive, quality]);
+
+      const handleQualityChange = (e) => {
+        const val = parseInt(e.target.value, 10);
+        setQuality(val);
+        if (!slamLowFeatureActive) return;
+        const decay = 0.980 + (val / 100) * (1.000 - 0.980);
+        const recover = 1.005 + (val / 100) * (1.050 - 1.005);
+        fetch(`${API_BASE}/api/publish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            topic: "car/mock/slam_params",
+            payload: { decay: parseFloat(decay.toFixed(4)), recover: parseFloat(recover.toFixed(4)) },
+          }),
+        }).catch(() => {});
+      };
+
+      const { msgs_per_sec, status } = rateData;
+      const colorMap = { ok: "#4ade80", warn: "#facc15", critical: "#ff6b6b" };
+      const color = colorMap[status] || colorMap.critical;
+      const decay = 0.980 + (quality / 100) * (1.000 - 0.980);
+      const recover = 1.005 + (quality / 100) * (1.050 - 1.005);
+
+      return (
+        <div className="glass-panel p-4 rounded-xl flex flex-col gap-3">
+          <h3 className="font-label text-xs text-on-surface-variant mb-1 flex items-center gap-2">
+            <span className="material-symbols-outlined text-sm">speed</span>
+            SLAM Publish Rate
+          </h3>
+
+          {/* Metric box */}
+          <div
+            className="flex items-center justify-between p-3 rounded-lg"
+            style={{
+              background: `${color}10`,
+              border: `1px solid ${color}40`,
+            }}
+          >
+            <span className="font-body text-sm text-on-surface-variant">msgs/sec</span>
+            <span className="font-display text-2xl" style={{ color }}>
+              {msgs_per_sec.toFixed(1)}
+            </span>
+          </div>
+
+          {/* Alert banner */}
+          {status === "warn" && (
+            <div
+              className="px-3 py-2 rounded text-sm font-body"
+              style={{
+                background: "rgba(250,204,21,0.12)",
+                border: "1px solid rgba(250,204,21,0.35)",
+                color: "#facc15",
+              }}
+            >
+              ⚠ Low SLAM feature rate — degraded tracking
+            </div>
+          )}
+          {status === "critical" && (
+            <div
+              className="px-3 py-2 rounded text-sm font-body"
+              style={{
+                background: "rgba(255,107,107,0.12)",
+                border: "1px solid rgba(255,107,107,0.35)",
+                color: "#ff6b6b",
+              }}
+            >
+              ✖ SLAM rate critical — car may stop
+            </div>
+          )}
+
+          {/* Room Quality slider — only visible when slam_low_feature is ON */}
+          {slamLowFeatureActive && (
+            <div className="flex flex-col gap-2 mt-1 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+              <div className="flex items-center justify-between">
+                <span className="font-label text-xs text-on-surface-variant flex items-center gap-1">
+                  <span className="material-symbols-outlined text-sm" style={{ color: "#facc15" }}>room_preferences</span>
+                  Room Quality
+                </span>
+                <span className="font-display text-sm" style={{ color: "#facc15" }}>{quality}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={quality}
+                onChange={handleQualityChange}
+                className="w-full accent-yellow-400"
+                style={{ accentColor: "#facc15" }}
+              />
+              <div className="flex justify-between text-xs font-body text-on-surface-variant opacity-70">
+                <span>0%</span>
+                <span>100%</span>
+              </div>
+              <div className="text-xs font-body text-on-surface-variant opacity-60 mt-1">
+                decay: {decay.toFixed(4)}  |  recover: {recover.toFixed(4)}
+              </div>
+            </div>
+          )}
         </div>
       );
     }
@@ -674,27 +819,7 @@ function computeElbow(fromName, toName) {
     }
 
     // ── Anomaly Injection Panel ──
-    function AnomalyInjectionPanel() {
-      const [toggles, setToggles] = useState(
-        Object.fromEntries(ANOMALY_TYPES.map(a => [a.key, false]))
-      );
-
-      const handleToggle = useCallback(async (key) => {
-        const newVal = !toggles[key];
-        setToggles(prev => ({ ...prev, [key]: newVal }));
-        try {
-          await fetch(`${API_BASE}/api/inject`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ anomaly: key, active: newVal }),
-          });
-        } catch (e) {
-          console.error("Inject failed:", e);
-          // Revert on failure
-          setToggles(prev => ({ ...prev, [key]: !newVal }));
-        }
-      }, [toggles]);
-
+    function AnomalyInjectionPanel({ toggles, onToggle }) {
       return (
         <aside
           id="anomaly-injection-panel"
@@ -710,25 +835,25 @@ function computeElbow(fromName, toName) {
               Trigger faults to test fallbacks.
             </p>
             <div className="space-y-3">
-              {ANOMALY_TYPES.map(({ key, label }) => (
+              {ANOMALY_TYPES.map(({ key, label, color }) => (
                 <label
                   key={key}
                   className="flex items-center justify-between p-3 rounded glass-panel cursor-pointer transition-colors"
                   style={{
                     ...(toggles[key] ? {
-                      boxShadow: "0 0 12px rgba(125, 211, 252, 0.15)",
-                      borderColor: "rgba(125, 211, 252, 0.25)",
+                      boxShadow: `0 0 12px ${color}26`,
+                      borderColor: `${color}40`,
                     } : {}),
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "rgba(125, 211, 252, 0.05)";
+                    e.currentTarget.style.background = `${color}0d`;
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.background = "";
                   }}
                 >
                   <span className="font-body text-sm text-on-surface">{label}</span>
-                  <ToggleSwitch active={toggles[key]} onToggle={() => handleToggle(key)} />
+                  <ToggleSwitch active={toggles[key]} onToggle={() => onToggle(key)} />
                 </label>
               ))}
             </div>
@@ -912,6 +1037,41 @@ function computeElbow(fromName, toName) {
       const [motorHistory]  = useHistory("/history/motors?minutes=10");
       const [phaseHistory]  = useHistory("/history/phase?minutes=10");
 
+      // SLAM rate status (for path chart color)
+      const [slamRateStatus, setSlamRateStatus] = useState("ok");
+      useEffect(() => {
+        let alive = true;
+        const poll = () => {
+          fetch(`${API_BASE}/live/slam_rate`)
+            .then(r => r.json())
+            .then(d => { if (alive) setSlamRateStatus(d.status); })
+            .catch(() => {});
+        };
+        poll();
+        const id = setInterval(poll, 500);
+        return () => { alive = false; clearInterval(id); };
+      }, []);
+
+      // Anomaly toggle state (lifted so SlamRatePanel can read slam_low_feature)
+      const [toggles, setToggles] = useState(
+        Object.fromEntries(ANOMALY_TYPES.map(a => [a.key, false]))
+      );
+
+      const handleToggle = useCallback(async (key) => {
+        const newVal = !toggles[key];
+        setToggles(prev => ({ ...prev, [key]: newVal }));
+        try {
+          await fetch(`${API_BASE}/api/inject`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ anomaly: key, active: newVal }),
+          });
+        } catch (e) {
+          console.error("Inject failed:", e);
+          setToggles(prev => ({ ...prev, [key]: !newVal }));
+        }
+      }, [toggles]);
+
       return (
         <React.Fragment>
           {/* Top App Bar */}
@@ -971,11 +1131,12 @@ function computeElbow(fromName, toName) {
                   <MapCanvas snapshot={snapshot} />
                 </div>
 
-                {/* Right column: Phase + IMU + Motor */}
+                {/* Right column: Phase + IMU + Motor + SLAM Rate */}
                 <div className="lg:col-span-4 flex flex-col gap-panel-gap">
                   <PhaseTimeline historyData={phaseHistory} livePhase={livePhase} />
                   <IMUHeadingChart historyData={imuHistory} liveImu={liveImu} />
                   <MotorPWMChart historyData={motorHistory} liveMotors={liveMotors} />
+                  <SlamRatePanel slamLowFeatureActive={toggles.slam_low_feature} />
                 </div>
               </div>
 
@@ -984,7 +1145,7 @@ function computeElbow(fromName, toName) {
             </main>
 
             {/* Right Sidebar: Anomaly Injection */}
-            <AnomalyInjectionPanel />
+            <AnomalyInjectionPanel toggles={toggles} onToggle={handleToggle} />
           </div>
         </React.Fragment>
       );

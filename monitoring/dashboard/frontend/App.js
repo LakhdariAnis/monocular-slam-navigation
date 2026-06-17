@@ -30,22 +30,32 @@ const MAX_PATH_POINTS = 500;
 const MAX_CHART_POINTS = 200;
 const ANOMALY_TYPES = [{
   key: "tracking_loss",
-  label: "Tracking Loss"
+  label: "Tracking Loss",
+  color: "#ff6b6b"
 }, {
   key: "motor_stall",
-  label: "Motor Stall"
+  label: "Motor Stall",
+  color: "#7dd3fc"
 }, {
   key: "position_jump",
-  label: "Position Jump"
+  label: "Position Jump",
+  color: "#7dd3fc"
 }, {
   key: "phase_timeout",
-  label: "Phase Timeout"
+  label: "Phase Timeout",
+  color: "#7dd3fc"
 }, {
   key: "imu_static_drift",
-  label: "IMU Static Drift"
+  label: "IMU Static Drift",
+  color: "#7dd3fc"
 }, {
   key: "trajectory_drift",
-  label: "Trajectory Drift"
+  label: "Trajectory Drift",
+  color: "#7dd3fc"
+}, {
+  key: "slam_low_feature",
+  label: "Low Feature Room",
+  color: "#facc15"
 }];
 const PHASE_COLORS = {
   departing: {
@@ -287,7 +297,8 @@ function StatusBar({
 // ── Position Path Chart ──
 function PositionPathChart({
   historyData,
-  liveSlam
+  liveSlam,
+  slamRateStatus
 }) {
   const [points, setPoints] = useState([]);
 
@@ -326,12 +337,17 @@ function PositionPathChart({
     if (cx == null || cy == null) return null;
     const isLast = index === points.length - 1;
     const opacity = 0.3 + 0.7 * (index / Math.max(points.length - 1, 1));
+    const degraded = slamRateStatus && slamRateStatus !== "ok";
+    const normalColor = "#7dd3fc";
+    const lastColor = "#c8eaff";
+    const degradedColor = "#facc15";
+    const dotColor = isLast ? degraded ? degradedColor : lastColor : degraded ? degradedColor : normalColor;
     return /*#__PURE__*/React.createElement("circle", {
       key: index,
       cx: cx,
       cy: cy,
       r: isLast ? 5 : 1.5,
-      fill: isLast ? "#c8eaff" : "#7dd3fc",
+      fill: dotColor,
       fillOpacity: opacity,
       filter: isLast ? "url(#glowFilter)" : undefined
     });
@@ -419,7 +435,7 @@ function PositionPathChart({
   }), /*#__PURE__*/React.createElement(Scatter, {
     data: points,
     line: {
-      stroke: "#7dd3fc",
+      stroke: slamRateStatus && slamRateStatus !== "ok" ? "#facc15" : "#7dd3fc",
       strokeWidth: 2,
       filter: "drop-shadow(0 0 6px rgba(125,211,252,0.6))"
     },
@@ -621,6 +637,153 @@ function MotorPWMChart({
   })))));
 }
 
+// ── Slam Rate Panel ──
+function SlamRatePanel({
+  slamLowFeatureActive
+}) {
+  const [rateData, setRateData] = useState({
+    msgs_per_sec: 0,
+    status: "critical"
+  });
+  const [quality, setQuality] = useState(50);
+  useEffect(() => {
+    let alive = true;
+    const poll = () => {
+      fetch(`${API_BASE}/live/slam_rate`).then(r => r.json()).then(d => {
+        if (alive) setRateData(d);
+      }).catch(() => {});
+    };
+    poll();
+    const id = setInterval(poll, 500);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Publish on first activation when toggle turns ON
+  const prevActiveRef = useRef(slamLowFeatureActive);
+  useEffect(() => {
+    if (slamLowFeatureActive && !prevActiveRef.current) {
+      const decay = 0.980 + quality / 100 * (1.000 - 0.980);
+      const recover = 1.005 + quality / 100 * (1.050 - 1.005);
+      fetch(`${API_BASE}/api/publish`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          topic: "car/mock/slam_params",
+          payload: {
+            decay: parseFloat(decay.toFixed(4)),
+            recover: parseFloat(recover.toFixed(4))
+          }
+        })
+      }).catch(() => {});
+    }
+    prevActiveRef.current = slamLowFeatureActive;
+  }, [slamLowFeatureActive, quality]);
+  const handleQualityChange = e => {
+    const val = parseInt(e.target.value, 10);
+    setQuality(val);
+    if (!slamLowFeatureActive) return;
+    const decay = 0.980 + val / 100 * (1.000 - 0.980);
+    const recover = 1.005 + val / 100 * (1.050 - 1.005);
+    fetch(`${API_BASE}/api/publish`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        topic: "car/mock/slam_params",
+        payload: {
+          decay: parseFloat(decay.toFixed(4)),
+          recover: parseFloat(recover.toFixed(4))
+        }
+      })
+    }).catch(() => {});
+  };
+  const {
+    msgs_per_sec,
+    status
+  } = rateData;
+  const colorMap = {
+    ok: "#4ade80",
+    warn: "#facc15",
+    critical: "#ff6b6b"
+  };
+  const color = colorMap[status] || colorMap.critical;
+  const decay = 0.980 + quality / 100 * (1.000 - 0.980);
+  const recover = 1.005 + quality / 100 * (1.050 - 1.005);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "glass-panel p-4 rounded-xl flex flex-col gap-3"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-label text-xs text-on-surface-variant mb-1 flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "material-symbols-outlined text-sm"
+  }, "speed"), "SLAM Publish Rate"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between p-3 rounded-lg",
+    style: {
+      background: `${color}10`,
+      border: `1px solid ${color}40`
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-body text-sm text-on-surface-variant"
+  }, "msgs/sec"), /*#__PURE__*/React.createElement("span", {
+    className: "font-display text-2xl",
+    style: {
+      color
+    }
+  }, msgs_per_sec.toFixed(1))), status === "warn" && /*#__PURE__*/React.createElement("div", {
+    className: "px-3 py-2 rounded text-sm font-body",
+    style: {
+      background: "rgba(250,204,21,0.12)",
+      border: "1px solid rgba(250,204,21,0.35)",
+      color: "#facc15"
+    }
+  }, "⚠ Low SLAM feature rate — degraded tracking"), status === "critical" && /*#__PURE__*/React.createElement("div", {
+    className: "px-3 py-2 rounded text-sm font-body",
+    style: {
+      background: "rgba(255,107,107,0.12)",
+      border: "1px solid rgba(255,107,107,0.35)",
+      color: "#ff6b6b"
+    }
+  }, "✖ SLAM rate critical — car may stop"), slamLowFeatureActive && /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2 mt-1 pt-3",
+    style: {
+      borderTop: "1px solid rgba(255,255,255,0.08)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-label text-xs text-on-surface-variant flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "material-symbols-outlined text-sm",
+    style: {
+      color: "#facc15"
+    }
+  }, "room_preferences"), "Room Quality"), /*#__PURE__*/React.createElement("span", {
+    className: "font-display text-sm",
+    style: {
+      color: "#facc15"
+    }
+  }, quality, "%")), /*#__PURE__*/React.createElement("input", {
+    type: "range",
+    min: "0",
+    max: "100",
+    value: quality,
+    onChange: handleQualityChange,
+    className: "w-full accent-yellow-400",
+    style: {
+      accentColor: "#facc15"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between text-xs font-body text-on-surface-variant opacity-70"
+  }, /*#__PURE__*/React.createElement("span", null, "0%"), /*#__PURE__*/React.createElement("span", null, "100%")), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-body text-on-surface-variant opacity-60 mt-1"
+  }, "decay: ", decay.toFixed(4), "  |  recover: ", recover.toFixed(4))));
+}
+
 // ── Phase Timeline ──
 function PhaseTimeline({
   historyData,
@@ -798,34 +961,10 @@ function ToggleSwitch({
 }
 
 // ── Anomaly Injection Panel ──
-function AnomalyInjectionPanel() {
-  const [toggles, setToggles] = useState(Object.fromEntries(ANOMALY_TYPES.map(a => [a.key, false])));
-  const handleToggle = useCallback(async key => {
-    const newVal = !toggles[key];
-    setToggles(prev => ({
-      ...prev,
-      [key]: newVal
-    }));
-    try {
-      await fetch(`${API_BASE}/api/inject`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          anomaly: key,
-          active: newVal
-        })
-      });
-    } catch (e) {
-      console.error("Inject failed:", e);
-      // Revert on failure
-      setToggles(prev => ({
-        ...prev,
-        [key]: !newVal
-      }));
-    }
-  }, [toggles]);
+function AnomalyInjectionPanel({
+  toggles,
+  onToggle
+}) {
   return /*#__PURE__*/React.createElement("aside", {
     id: "anomaly-injection-panel",
     className: "w-80 border-l border-outline-variant p-gutter flex flex-col gap-6",
@@ -842,18 +981,19 @@ function AnomalyInjectionPanel() {
     className: "space-y-3"
   }, ANOMALY_TYPES.map(({
     key,
-    label
+    label,
+    color
   }) => /*#__PURE__*/React.createElement("label", {
     key: key,
     className: "flex items-center justify-between p-3 rounded glass-panel cursor-pointer transition-colors",
     style: {
       ...(toggles[key] ? {
-        boxShadow: "0 0 12px rgba(125, 211, 252, 0.15)",
-        borderColor: "rgba(125, 211, 252, 0.25)"
+        boxShadow: `0 0 12px ${color}26`,
+        borderColor: `${color}40`
       } : {})
     },
     onMouseEnter: e => {
-      e.currentTarget.style.background = "rgba(125, 211, 252, 0.05)";
+      e.currentTarget.style.background = `${color}0d`;
     },
     onMouseLeave: e => {
       e.currentTarget.style.background = "";
@@ -862,7 +1002,7 @@ function AnomalyInjectionPanel() {
     className: "font-body text-sm text-on-surface"
   }, label), /*#__PURE__*/React.createElement(ToggleSwitch, {
     active: toggles[key],
-    onToggle: () => handleToggle(key)
+    onToggle: () => onToggle(key)
   }))))));
 }
 
@@ -1062,6 +1202,51 @@ function App() {
   const [imuHistory] = useHistory("/history/imu?minutes=10");
   const [motorHistory] = useHistory("/history/motors?minutes=10");
   const [phaseHistory] = useHistory("/history/phase?minutes=10");
+
+  // SLAM rate status (for path chart color)
+  const [slamRateStatus, setSlamRateStatus] = useState("ok");
+  useEffect(() => {
+    let alive = true;
+    const poll = () => {
+      fetch(`${API_BASE}/live/slam_rate`).then(r => r.json()).then(d => {
+        if (alive) setSlamRateStatus(d.status);
+      }).catch(() => {});
+    };
+    poll();
+    const id = setInterval(poll, 500);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Anomaly toggle state (lifted so SlamRatePanel can read slam_low_feature)
+  const [toggles, setToggles] = useState(Object.fromEntries(ANOMALY_TYPES.map(a => [a.key, false])));
+  const handleToggle = useCallback(async key => {
+    const newVal = !toggles[key];
+    setToggles(prev => ({
+      ...prev,
+      [key]: newVal
+    }));
+    try {
+      await fetch(`${API_BASE}/api/inject`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          anomaly: key,
+          active: newVal
+        })
+      });
+    } catch (e) {
+      console.error("Inject failed:", e);
+      setToggles(prev => ({
+        ...prev,
+        [key]: !newVal
+      }));
+    }
+  }, [toggles]);
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("nav", {
     className: "fixed top-0 w-full z-50 border-b border-outline-variant",
     style: {
@@ -1133,9 +1318,14 @@ function App() {
   }), /*#__PURE__*/React.createElement(MotorPWMChart, {
     historyData: motorHistory,
     liveMotors: liveMotors
+  }), /*#__PURE__*/React.createElement(SlamRatePanel, {
+    slamLowFeatureActive: toggles.slam_low_feature
   }))), /*#__PURE__*/React.createElement(AnomalyFeed, {
     snapshot: snapshot
-  })), /*#__PURE__*/React.createElement(AnomalyInjectionPanel, null)));
+  })), /*#__PURE__*/React.createElement(AnomalyInjectionPanel, {
+    toggles: toggles,
+    onToggle: handleToggle
+  })));
 }
 
 // ─────────────────────────────────────────────

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,8 @@ log = logging.getLogger("backend")
 latest: dict[str, Any] = {}
 ws_clients: set[WebSocket] = set()
 ws_clients_lock = asyncio.Lock()
+
+slam_timestamps: collections.deque = collections.deque(maxlen=60)
 
 # asyncio.Queue bridging the paho-mqtt thread → async consumer
 # Created lazily inside the running event loop (see lifespan)
@@ -88,7 +92,6 @@ def _start_mqtt_thread():
     _mqtt_client.on_message    = _on_message
 
     def _connect_loop():
-        import time
         while True:
             try:
                 _mqtt_client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, keepalive=60)
@@ -109,6 +112,9 @@ async def _mqtt_consumer():
         topic, payload = await _mqtt_queue.get()
 
         latest[topic] = payload
+
+        if topic == "car/slam/pose":
+            slam_timestamps.append(time.time())
         snapshot = json.dumps(latest)
         async with ws_clients_lock:
             stale: list[WebSocket] = []
@@ -262,6 +268,22 @@ class InjectRequest(BaseModel):
     active: bool
 
 
+class PublishRequest(BaseModel):
+    topic: str
+    payload: dict
+
+
+@app.post("/api/publish")
+async def publish_mqtt(req: PublishRequest):
+    if _mqtt_client is not None:
+        _mqtt_client.publish(req.topic, json.dumps(req.payload), qos=0)
+        log.info("PUBLISH → %s  %s", req.topic, req.payload)
+        return {"ok": True}
+    else:
+        log.warning("PUBLISH failed — MQTT client not connected")
+        return {"ok": False, "error": "MQTT not connected"}
+
+
 @app.post("/api/inject")
 async def inject_anomaly(req: InjectRequest):
     payload = json.dumps({"anomaly": req.anomaly, "active": req.active})
@@ -282,6 +304,21 @@ async def goto(request: Request):
         return {"status": "error", "reason": "missing target"}
     _mqtt_client.publish("car/mock/goto", json.dumps({"target": target}))
     return {"status": "sent", "target": target}
+
+
+@app.get("/live/slam_rate")
+async def live_slam_rate():
+    now = time.time()
+    cutoff = now - 2.0
+    count = sum(1 for t in slam_timestamps if t > cutoff)
+    msgs_per_sec = count / 2.0
+    if msgs_per_sec >= 20:
+        status = "ok"
+    elif msgs_per_sec >= 10:
+        status = "warn"
+    else:
+        status = "critical"
+    return {"msgs_per_sec": msgs_per_sec, "status": status}
 
 
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
