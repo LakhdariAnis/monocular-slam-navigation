@@ -11,7 +11,7 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 import uvicorn
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -262,7 +262,7 @@ class InjectRequest(BaseModel):
     active: bool
 
 
-@app.post("/inject")
+@app.post("/api/inject")
 async def inject_anomaly(req: InjectRequest):
     payload = json.dumps({"anomaly": req.anomaly, "active": req.active})
     if _mqtt_client is not None:
@@ -272,6 +272,16 @@ async def inject_anomaly(req: InjectRequest):
     else:
         log.warning("INJECT failed — MQTT client not connected")
         return {"ok": False, "error": "MQTT not connected"}
+
+
+@app.post("/api/goto")
+async def goto(request: Request):
+    body = await request.json()
+    target = body.get("target", "")
+    if not target:
+        return {"status": "error", "reason": "missing target"}
+    _mqtt_client.publish("car/mock/goto", json.dumps({"target": target}))
+    return {"status": "sent", "target": target}
 
 
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"

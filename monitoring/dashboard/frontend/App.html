@@ -832,7 +832,7 @@
         const newVal = !toggles[key];
         setToggles(prev => ({ ...prev, [key]: newVal }));
         try {
-          await fetch(`${API_BASE}/inject`, {
+          await fetch(`${API_BASE}/api/inject`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ anomaly: key, active: newVal }),

@@ -1,181 +1,6 @@
-<!DOCTYPE html>
-<html class="dark" lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AeroMonitor v4.0 — Autonomous Dashboard</title>
-  <meta name="description" content="Real-time autonomous navigation monitoring dashboard with SLAM, IMU, and motor telemetry" />
-
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-
-  <!-- Google Fonts -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet" />
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
-
-  <!-- React 18 -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-
-  <!-- PropTypes (Required by Recharts UMD) -->
-  <script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.js"></script>
-
-  <!-- Recharts (needs React loaded first) -->
-  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
-
-  <!-- Babel for JSX (loaded last before our script) -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <!-- Tailwind config -->
-  <script>
-    tailwind.config = {
-      darkMode: "class",
-      theme: {
-        extend: {
-          colors: {
-            "tertiary-fixed-dim": "#c8a0f0",
-            "surface-variant": "#1a2438",
-            tertiary: "#c8a0f0",
-            surface: "#0f1524",
-            "inverse-primary": "#0a4c6e",
-            "on-surface": "#e0e8f0",
-            "error-container": "#3d1414",
-            "on-error": "#1a0000",
-            "on-secondary-fixed": "#0d1f2b",
-            "on-tertiary-fixed": "#1a002e",
-            "surface-container-high": "#1a2438",
-            "tertiary-container": "#3d2060",
-            "surface-dim": "#0f1524",
-            "primary-fixed-dim": "#7dd3fc",
-            "outline-variant": "#2a3a48",
-            "secondary-container": "#1a3a4e",
-            error: "#ff6b6b",
-            primary: "#7dd3fc",
-            "on-secondary-fixed-variant": "#2a4a5e",
-            "on-primary-fixed-variant": "#004d73",
-            "inverse-surface": "#e0e8f0",
-            "on-primary-fixed": "#001f2e",
-            "primary-fixed": "#c8eaff",
-            "surface-tint": "#7dd3fc",
-            "surface-container-lowest": "#0a0e1a",
-            "on-tertiary-fixed-variant": "#4d2a73",
-            "on-error-container": "#ffb3b3",
-            "surface-container-highest": "#202c42",
-            outline: "#4a6070",
-            "surface-container-low": "#111828",
-            "on-secondary-container": "#c0d8e8",
-            background: "#0a0e1a",
-            "on-tertiary": "#1a002e",
-            "on-background": "#e0e8f0",
-            "secondary-fixed-dim": "#88b4cc",
-            "on-tertiary-container": "#e8d0ff",
-            "on-primary-container": "#c8eaff",
-            "primary-container": "#0e4d6e",
-            "on-secondary": "#001f2e",
-            "on-primary": "#001f2e",
-            "surface-container": "#141c2e",
-            "surface-bright": "#1a2438",
-            secondary: "#88b4cc",
-            "on-surface-variant": "#a0b4c4",
-            "inverse-on-surface": "#0a0e1a",
-            "tertiary-fixed": "#e8d0ff",
-            "secondary-fixed": "#c0d8e8",
-          },
-          borderRadius: {
-            DEFAULT: "0.5rem",
-            lg: "1rem",
-            xl: "1.5rem",
-            full: "9999px",
-          },
-          spacing: {
-            gutter: "1.5rem",
-            "panel-gap": "1rem",
-          },
-          fontFamily: {
-            headline: ["Inter"],
-            display: ["Inter"],
-            body: ["Inter"],
-            label: ["Inter"],
-          },
-        },
-      },
-    };
-  </script>
-
-  <style>
-    body { background-color: #0a0e1a; color: #e0e8f0; }
-    .glass-panel {
-      background: rgba(15, 21, 36, 0.6);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(125, 211, 252, 0.1);
-    }
-    .glass-panel-elevated {
-      background: rgba(15, 21, 36, 0.75);
-      backdrop-filter: blur(24px);
-      -webkit-backdrop-filter: blur(24px);
-      border: 1px solid rgba(125, 211, 252, 0.15);
-    }
-    .glow-text-primary { text-shadow: 0 0 10px rgba(125, 211, 252, 0.5); }
-    .glow-border-primary { box-shadow: 0 0 15px rgba(125, 211, 252, 0.3); }
-
-    /* Custom scrollbar */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.02); }
-    ::-webkit-scrollbar-thumb { background: rgba(125, 211, 252, 0.2); border-radius: 10px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(125, 211, 252, 0.4); }
-
-    /* Pulse animation for WS indicator */
-    @keyframes pulse-glow {
-      0%, 100% { box-shadow: 0 0 4px currentColor; opacity: 1; }
-      50% { box-shadow: 0 0 12px currentColor; opacity: 0.7; }
-    }
-    .pulse-green {
-      animation: pulse-glow 2s ease-in-out infinite;
-      color: #22c55e;
-    }
-
-    /* Recharts overrides */
-    .recharts-cartesian-grid-horizontal line,
-    .recharts-cartesian-grid-vertical line {
-      stroke: rgba(125, 211, 252, 0.06) !important;
-    }
-    .recharts-text { fill: #a0b4c4 !important; font-size: 10px !important; }
-
-    /* Toggle switch */
-    .toggle-track {
-      width: 36px; height: 20px; border-radius: 10px;
-      background: #1a2438; position: relative; cursor: pointer;
-      transition: background 0.3s, box-shadow 0.3s;
-      border: 1px solid rgba(125, 211, 252, 0.1);
-    }
-    .toggle-track.active {
-      background: rgba(125, 211, 252, 0.3);
-      box-shadow: 0 0 12px rgba(125, 211, 252, 0.4);
-      border-color: rgba(125, 211, 252, 0.4);
-    }
-    .toggle-thumb {
-      width: 16px; height: 16px; border-radius: 50%;
-      background: #a0b4c4; position: absolute; top: 2px; left: 2px;
-      transition: transform 0.3s, background 0.3s;
-    }
-    .toggle-track.active .toggle-thumb {
-      transform: translateX(16px);
-      background: #7dd3fc;
-    }
-
-    /* Chart grid background */
-    .chart-grid-bg {
-      background-image: linear-gradient(rgba(125, 211, 252, 0.05) 1px, transparent 1px),
-                         linear-gradient(90deg, rgba(125, 211, 252, 0.05) 1px, transparent 1px);
-      background-size: 50px 50px;
-    }
-  </style>
-</head>
-<body class="min-h-screen flex flex-col font-body text-base overflow-x-hidden">
-  <div id="root"></div>
-
-  <script type="text/babel">
+// ─────────────────────────────────────────────
+    // IMPORTS from global UMD bundles
+    // ─────────────────────────────────────────────
     const {
       useState, useEffect, useRef, useCallback, useMemo,
     } = React;
@@ -185,6 +10,9 @@
       XAxis, YAxis, CartesianGrid, Tooltip, Cell,
     } = Recharts;
 
+    // ─────────────────────────────────────────────
+    // CONSTANTS
+    // ─────────────────────────────────────────────
     const API_BASE = "http://localhost:8000";
     const WS_URL   = "ws://localhost:8000/ws";
 
@@ -210,6 +38,35 @@
       init:      { bg: "rgba(26,36,56,0.6)", border: "rgba(42,58,72,0.5)", text: "#a0b4c4" },
     };
 
+const STATIONS = {
+  start:     { x: -0.1155, z: -0.2249, standoff: [-0.1155,  0.0551], orientation: "-Z Wall" },
+  station_1: { x:  0.6900, z:  0.5521, standoff: [ 0.3900,  0.5521], orientation: "+X Wall" },
+  station_2: { x: -0.0303, z:  1.5225, standoff: [-0.0303,  1.2225], orientation: "+Z Wall" },
+};
+
+const ROUTE = [
+  ["start",     "station_1"],
+  ["station_1", "station_2"],
+  ["station_2", "start"],
+];
+
+function computeElbow(fromName, toName) {
+  const src = STATIONS[fromName];
+  const dst = STATIONS[toName];
+  const [cx, cz] = fromName === "start" ? [src.x, src.z] : src.standoff;
+  const [sx, sz] = dst.standoff;
+  let ex, ez;
+  if (dst.orientation === "+X Wall" || dst.orientation === "-X Wall") {
+    ex = cx; ez = sz;
+  } else {
+    ex = sx; ez = cz;
+  }
+  return { elbow: [ex, ez], standoff: [sx, sz], target: [dst.x, dst.z] };
+}
+
+    // ─────────────────────────────────────────────
+    // HELPERS
+    // ─────────────────────────────────────────────
     function fmtTime(ts) {
       if (!ts) return "";
       const d = new Date(typeof ts === "number" ? ts * 1000 : ts);
@@ -223,6 +80,10 @@
       const s = Math.round(seconds % 60);
       return `${m}m${s}s`;
     }
+
+    // ─────────────────────────────────────────────
+    // CUSTOM HOOKS
+    // ─────────────────────────────────────────────
 
     function useWebSocket() {
       const [connected, setConnected] = useState(false);
@@ -245,7 +106,7 @@
           try {
             const data = JSON.parse(evt.data);
             setSnapshot(data);
-          } catch (e) { console.error('WS parse error:', e); }
+          } catch {}
         };
 
         ws.onclose = () => {
@@ -285,6 +146,11 @@
       return [data, setData];
     }
 
+    // ─────────────────────────────────────────────
+    // COMPONENTS
+    // ─────────────────────────────────────────────
+
+    // ── Status Badge ──
     function StatusBadge({ color, shadow, children }) {
       return (
         <div className="glass-panel rounded-full px-4 py-1.5 flex items-center gap-3">
@@ -297,15 +163,19 @@
       );
     }
 
+    // ── Status Bar ──
     function StatusBar({ slam, phase, motors, slamSeq, wsConnected }) {
+      // SLAM tracking status
       const slamOk = slam?.ok;
       let slamLabel, slamColor;
       if (slamOk === true)       { slamLabel = "SLAM TRACKING: OK";    slamColor = "#4ade80"; }
       else if (slamOk === false) { slamLabel = "SLAM TRACKING: LOST";  slamColor = "#ff6b6b"; }
       else                       { slamLabel = "SLAM TRACKING: RELOC"; slamColor = "#facc15"; }
 
+      // Phase
       const phaseLabel = phase?.phase ? phase.phase.toUpperCase().replace(/_/g, " ") : "—";
 
+      // Motor status
       const totalPwm = motors?.total ?? 0;
       const innerPwm = motors?.inner ?? 0;
       const motorRunning = totalPwm > 0;
@@ -340,9 +210,11 @@
       );
     }
 
+    // ── Position Path Chart ──
     function PositionPathChart({ historyData, liveSlam }) {
       const [points, setPoints] = useState([]);
 
+      // Load history once
       useEffect(() => {
         if (historyData.length > 0) {
           const pts = historyData
@@ -352,6 +224,7 @@
         }
       }, [historyData]);
 
+      // Append live points
       useEffect(() => {
         if (liveSlam && liveSlam.ok && liveSlam.x != null && liveSlam.z != null) {
           setPoints(prev => {
@@ -363,6 +236,7 @@
 
       const currentPos = points.length > 0 ? points[points.length - 1] : null;
 
+      // Custom dot to show trail
       const renderDot = (props) => {
         const { cx, cy, index } = props;
         if (cx == null || cy == null) return null;
@@ -454,6 +328,7 @@
       );
     }
 
+    // ── IMU Heading Chart ──
     function IMUHeadingChart({ historyData, liveImu }) {
       const [points, setPoints] = useState([]);
 
@@ -529,6 +404,7 @@
       );
     }
 
+    // ── Motor PWM Chart ──
     function MotorPWMChart({ historyData, liveMotors }) {
       const [points, setPoints] = useState([]);
 
@@ -610,6 +486,7 @@
       );
     }
 
+    // ── Phase Timeline ──
     function PhaseTimeline({ historyData, livePhase }) {
       const [segments, setSegments] = useState([]);
 
@@ -706,6 +583,7 @@
       );
     }
 
+    // ── Anomaly Feed ──
     function AnomalyFeed({ snapshot }) {
       const [entries, setEntries] = useState([]);
 
@@ -781,6 +659,7 @@
       );
     }
 
+    // ── Toggle Switch ──
     function ToggleSwitch({ active, onToggle }) {
       return (
         <div
@@ -794,6 +673,7 @@
       );
     }
 
+    // ── Anomaly Injection Panel ──
     function AnomalyInjectionPanel() {
       const [toggles, setToggles] = useState(
         Object.fromEntries(ANOMALY_TYPES.map(a => [a.key, false]))
@@ -803,7 +683,7 @@
         const newVal = !toggles[key];
         setToggles(prev => ({ ...prev, [key]: newVal }));
         try {
-          await fetch(`${API_BASE}/inject`, {
+          await fetch(`${API_BASE}/api/inject`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ anomaly: key, active: newVal }),
@@ -857,16 +737,176 @@
       );
     }
 
+    // ── Navigation Map Canvas ──
+    function MapCanvas({ snapshot }) {
+      const canvasRef = useRef(null);
+      const CAR_R = 10, ARROW_LEN = 22;
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+
+        const W = canvas.offsetWidth;
+        const H = canvas.offsetHeight;
+        canvas.width  = W;
+        canvas.height = H;
+
+        const PAD = 40;
+        const X_MIN = -0.8,  X_MAX = 1.1;   // shift up to center start vertically
+        const Z_MIN = -0.5,  Z_MAX = 1.8;   // keep Z range
+        const scaleX = (W - PAD * 2) / (X_MAX - X_MIN);
+        const scaleZ = (H - PAD * 2) / (Z_MAX - Z_MIN);
+        const scale  = Math.min(scaleX, scaleZ);
+        const wx = (x) => PAD + (x - X_MIN) * scale;
+        const wz = (z) => H - PAD - (z - Z_MIN) * scale;
+
+        // Background
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = "#0d1117";
+        ctx.fillRect(0, 0, W, H);
+
+        // Grid
+        ctx.strokeStyle = "rgba(255,255,255,0.06)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+
+        // Vertical lines — iterate over X world values
+        for (let v = -0.8; v <= 1.1; v = Math.round((v + 0.25) * 1000) / 1000) {
+          const px = wx(v);
+          ctx.beginPath();
+          ctx.moveTo(px, 0);
+          ctx.lineTo(px, H);
+          ctx.stroke();
+        }
+
+        // Horizontal lines — iterate over Z world values
+        for (let v = -0.5; v <= 1.8; v = Math.round((v + 0.25) * 1000) / 1000) {
+          const pz = wz(v);
+          ctx.beginPath();
+          ctx.moveTo(0, pz);
+          ctx.lineTo(W, pz);
+          ctx.stroke();
+        }
+
+        // Stations as rectangles
+        const RW = 18, RH = 10;
+        ctx.textAlign = "center";
+        for (const [name, s] of Object.entries(STATIONS)) {
+          if (name.startsWith("_") || typeof s.x !== "number") continue;
+          const px = wx(s.x), pz = wz(s.z);
+          ctx.fillStyle = "#1f6feb";
+          ctx.strokeStyle = "#e6edf3";
+          ctx.lineWidth = 1.5;
+          ctx.fillRect(px - RW / 2, pz - RH / 2, RW, RH);
+          ctx.strokeRect(px - RW / 2, pz - RH / 2, RW, RH);
+          ctx.fillStyle = "#8b949e";
+          ctx.font = "11px monospace";
+          ctx.textAlign = "center";
+          ctx.fillText(name.replace('_', ' '), px, pz + RH / 2 + 14);
+        }
+
+        const slam  = snapshot["car/slam/pose"];
+        const imu   = snapshot["car/imu"];
+        const phase = snapshot["car/nav/phase"];
+
+        // Car
+        if (slam && slam.x != null && slam.z != null) {
+          const cx = wx(slam.x), cz = wz(slam.z);
+          const hdgRad = ((imu?.heading_deg ?? 0) * Math.PI / 180) - Math.PI / 2;
+
+          ctx.beginPath();
+          ctx.arc(cx, cz, CAR_R, 0, Math.PI * 2);
+          ctx.fillStyle = "#e6edf3";
+          ctx.fill();
+          ctx.strokeStyle = "#30363d";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Arrow
+          const ax = cx + Math.cos(hdgRad) * ARROW_LEN;
+          const az = cz + Math.sin(hdgRad) * ARROW_LEN;
+          ctx.beginPath();
+          ctx.moveTo(cx, cz);
+          ctx.lineTo(ax, az);
+          ctx.strokeStyle = "#238636";
+          ctx.lineWidth = 2.5;
+          ctx.lineCap = "round";
+          ctx.stroke();
+          ctx.lineCap = "butt";
+
+          // Label
+          ctx.fillStyle = "#8b949e";
+          ctx.font = "500 10px system-ui";
+          ctx.textAlign = "center";
+          ctx.fillText("car", cx, cz + CAR_R + 12);
+        }
+      }, [snapshot]);
+
+      return (
+        <div id="nav-map" className="lg:col-span-8 glass-panel rounded-xl overflow-hidden flex flex-col relative min-h-[400px]">
+          <div className="p-4 border-b border-outline-variant flex justify-between items-center z-10"
+               style={{ background: "rgba(32, 44, 66, 0.3)" }}>
+            <h3 className="font-headline text-lg text-primary glow-text-primary">Navigation Map</h3>
+            <span className="font-label text-xs text-on-surface-variant">Live</span>
+          </div>
+          <div className="flex-1 relative z-[1] min-h-[340px] flex items-center justify-center"
+               style={{ background: "#0a0e1a" }}>
+            <div style={{ width: '100%', height: '500px', position: 'relative' }}>
+              <canvas
+                ref={canvasRef}
+                style={{ width: '100%', height: '100%', display: 'block' }}
+              />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'center' }}>
+            {Object.keys(STATIONS).map(name => (
+              <button
+                key={name}
+                onClick={() => fetch('/api/goto', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ target: name })
+                })}
+                style={{
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: '8px',
+                  color: '#e6edf3',
+                  padding: '6px 16px',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  letterSpacing: '0.03em',
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => e.target.style.background = 'rgba(255,255,255,0.10)'}
+                onMouseLeave={e => e.target.style.background = 'rgba(255,255,255,0.05)'}
+              >
+                {name.replace('_', ' ')}
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // ─────────────────────────────────────────────
+    // MAIN APP
+    // ─────────────────────────────────────────────
     function App() {
       const { connected, snapshot } = useWebSocket();
 
+      // Extract live data from snapshot
       const liveSlam   = snapshot["car/slam/pose"] || null;
       const liveImu    = snapshot["car/imu"] || null;
       const liveMotors = snapshot["car/motors"] || null;
       const livePhase  = snapshot["car/nav/phase"] || null;
 
+      // SLAM sequence
       const slamSeq = liveSlam?.seq ?? null;
 
+      // Load history on mount
       const [slamHistory]   = useHistory("/history/slam?minutes=10");
       const [imuHistory]    = useHistory("/history/imu?minutes=10");
       const [motorHistory]  = useHistory("/history/motors?minutes=10");
@@ -927,7 +967,9 @@
               {/* Dashboard Grid */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-panel-gap flex-1">
                 {/* Position Path Chart */}
-                <PositionPathChart historyData={slamHistory} liveSlam={liveSlam} />
+                <div className="lg:col-span-8 flex flex-col gap-panel-gap">
+                  <MapCanvas snapshot={snapshot} />
+                </div>
 
                 {/* Right column: Phase + IMU + Motor */}
                 <div className="lg:col-span-4 flex flex-col gap-panel-gap">
@@ -948,8 +990,8 @@
       );
     }
 
+    // ─────────────────────────────────────────────
+    // MOUNT
+    // ─────────────────────────────────────────────
     const root = ReactDOM.createRoot(document.getElementById("root"));
     root.render(<App />);
-  </script>
-</body>
-</html>

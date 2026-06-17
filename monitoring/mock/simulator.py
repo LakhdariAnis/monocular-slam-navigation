@@ -1,6 +1,7 @@
 import json
 import math
 import random
+import sys
 import threading
 import time
 
@@ -21,17 +22,17 @@ SEARCH_SPIN         = 35
 SPIN_START          = 45
 SPIN_MIN            = 35
 SPIN_DECAY          = 1       # per iteration (not used directly in speed calc, kept for reference)
-WAYPOINT_THRESHOLD  = 0.02   # elbow arrival (m)
-STATION_THRESHOLD   = 0.015  # standoff arrival (m)
+WAYPOINT_THRESHOLD  = 0.05   # elbow arrival (m)
+STATION_THRESHOLD   = 0.04   # standoff arrival (m)
 SPIN_TOLERANCE      = 5      # degrees
 DEPART_DIST         = 0.30   # reverse distance (m)
 
-FWD_FAST_RATE   = 0.008    # FORWARD_SPEED=45 total
-FWD_SLOW_RATE   = 0.007    # SLOW_SPEED=40
-REVERSE_RATE    = 0.008    # same as forward (FORWARD_SPEED used for depart)
+FWD_FAST_RATE   = 0.00110  # ~0.033 m/s at 30 Hz
+FWD_SLOW_RATE   = 0.00095  # SLOW_SPEED=40
+REVERSE_RATE    = 0.00110  # same as forward (FORWARD_SPEED used for depart)
 
-SPIN_RATE_DEG   = 2.5      # SPIN_SPEED=40, imu@50Hz
-SEARCH_SPIN_RATE = 2.2     # SEARCH_SPIN=35
+SPIN_RATE_DEG   = 0.36     # ~0.36°/tick at 50 Hz → 90° ≈ 5 s
+SEARCH_SPIN_RATE = 0.32    # SEARCH_SPIN=35
 
 POSITION_JUMP_MAGNITUDE  = 2.0     # metres — single-tick jump
 DRIFT_RATE_DEG_PER_SEC   = 3.0     # heading drift during arrived/departing
@@ -68,6 +69,12 @@ ARRIVED_HEADING = {
     "start":    180.0,
 }
 
+DEPART_HEADING = {
+    "station_1": 270.0,
+    "station_2": 180.0,
+    "start":       0.0,
+}
+
 ALIGN_TARGET_AREA = 15000
 ALIGN_INITIAL_AREA = 1000
 
@@ -83,6 +90,11 @@ _anomalies = {
 }
 _position_jump_fired = False
 
+_docked_at = "start"
+
+_goto_target = None
+_goto_event  = threading.Event()
+
 
 def get_anomaly(key: str) -> bool:
     with _lock:
@@ -96,6 +108,16 @@ def set_anomaly(key: str, value: bool):
             print(f"[INJECT] {key} → {'ON' if value else 'OFF'}")
         else:
             print(f"[INJECT] unknown anomaly key: {key}")
+
+
+def set_goto(target: str):
+    global _goto_target
+    if target == _docked_at:
+        print(f"[GOTO] already at {target}, ignoring")
+        return
+    _goto_target = target
+    _goto_event.set()
+    print(f"[GOTO] → {target}")
 
 
 def _dist(x1, z1, x2, z2):
@@ -123,11 +145,19 @@ def _compute_elbow(from_name, to_name):
     sx, sz = dst["standoff"]
 
     if orientation in ("+X Wall", "-X Wall"):
+        # destination is on X wall — need L-path via elbow
         elbow_x, elbow_z = cx, sz
+        return elbow_x, elbow_z, sx, sz
     else:
-        elbow_x, elbow_z = sx, cz
-
-    return elbow_x, elbow_z, sx, sz
+        # destination is on Z wall — check if already aligned on X axis
+        src_orientation = src["orientation"]
+        if src_orientation in ("+Z Wall", "-Z Wall"):
+            # both on Z walls — straight line, no elbow needed
+            return None, None, sx, sz
+        else:
+            # source on X wall, destination on Z wall — need elbow
+            elbow_x, elbow_z = sx, cz
+            return elbow_x, elbow_z, sx, sz
 
 
 client = mqtt.Client(client_id="mock_simulator")
@@ -135,9 +165,8 @@ client = mqtt.Client(client_id="mock_simulator")
 
 def on_connect(c, userdata, flags, rc):
     if rc == 0:
-        print(f"[MQTT] connected to {BROKER_HOST}:{BROKER_PORT}")
         c.subscribe("car/mock/inject")
-        print("[MQTT] subscribed to car/mock/inject")
+        c.subscribe("car/mock/goto")
     else:
         print(f"[MQTT] connection failed rc={rc}")
 
@@ -145,15 +174,25 @@ def on_connect(c, userdata, flags, rc):
 def on_message(c, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
+    except Exception as e:
+        print(f"[INJECT] bad payload: {e}")
+        return
+
+    if msg.topic == "car/mock/goto":
+        target = payload.get("target", "")
+        if target in STATIONS:
+            set_goto(target)
+        else:
+            print(f"[GOTO] unknown station: {target}")
+    elif msg.topic == "car/mock/inject":
         anomaly = payload.get("anomaly", "")
         active  = bool(payload.get("active", False))
         set_anomaly(anomaly, active)
-    except Exception as e:
-        print(f"[INJECT] bad payload: {e}")
 
 
 client.on_connect = on_connect
 client.on_message = on_message
+client.on_log = None
 
 
 def publish(topic: str, payload: dict):
@@ -370,7 +409,7 @@ def _sim_spin(target_bearing_deg, spin_speed=SPIN_SPEED):
 
     with state.lock:
         state.motion_intent  = "spin"
-        state.forward_dir_x  = -1.0 if turn_right else +1.0
+        state.forward_dir_x  = +1.0 if turn_right else -1.0
         state.forward_dir_z  = 0.0
 
     _pub_spin(left=not turn_right, speed=spin_speed)
@@ -401,13 +440,9 @@ def _sim_drive(target_x, target_z, threshold,
     dir_x = math.sin(rad)
     dir_z = math.cos(rad)
 
-    if reverse:
-        dir_x = -dir_x
-        dir_z = -dir_z
-
     with state.lock:
-        state.forward_dir_x = dir_x if not reverse else -dir_x
-        state.forward_dir_z = dir_z if not reverse else -dir_z
+        state.forward_dir_x = dir_x
+        state.forward_dir_z = dir_z
         state.motion_intent  = "reverse" if reverse else "forward"
         cx, cz = state.x, state.z
 
@@ -457,50 +492,43 @@ def _sim_drive(target_x, target_z, threshold,
     time.sleep(0.2)
 
 
-def _sim_depart(from_station_name):
-    info = STATIONS[from_station_name]
-    orientation = info["orientation"]
+def _sim_depart_forward(from_station_name):
+    depart_hdg = DEPART_HEADING[from_station_name]
+    print(f"  [depart] from={from_station_name}  heading={depart_hdg}°  dist={DEPART_DIST}m")
 
-    orient_vec = {
-        "-X Wall": (+1,  0),
-        "+X Wall": (-1,  0),
-        "-Z Wall": ( 0, +1),
-        "+Z Wall": ( 0, -1),
-    }
-    vx, vz = orient_vec[orientation]
+    _sim_spin(depart_hdg, spin_speed=SPIN_SPEED)
 
-    sx, sz = info["standoff"] if from_station_name != "start" else (info["x"], info["z"])
-
-    clear_x = sx - vx * DEPART_DIST
-    clear_z = sz - vz * DEPART_DIST
-
-    bear = math.degrees(math.atan2(vx, vz)) % 360
+    rad = math.radians(depart_hdg)
+    dir_x = math.sin(rad)
+    dir_z = math.cos(rad)
 
     with state.lock:
-        state.motion_intent  = "reverse"
-        state.forward_dir_x  = vx
-        state.forward_dir_z  = vz
-        state.forward_speed  = FORWARD_SPEED
+        cx, cz = state.x, state.z
 
-    _pub_reverse()
+    target_x = cx + dir_x * DEPART_DIST
+    target_z = cz + dir_z * DEPART_DIST
 
-    effective_threshold = WAYPOINT_THRESHOLD
-    if get_anomaly("phase_timeout"):
-        effective_threshold = WAYPOINT_THRESHOLD / PHASE_TIMEOUT_MULTIPLIER
+    with state.lock:
+        state.forward_dir_x = dir_x
+        state.forward_dir_z = dir_z
+        state.motion_intent = "forward"
+        state.forward_speed = FORWARD_SPEED
 
-    poll_interval = 0.05
+    _pub_forward(FORWARD_SPEED)
+
     while True:
-        time.sleep(poll_interval)
+        time.sleep(0.05)
         if get_anomaly("motor_stall"):
             continue
         with state.lock:
             cx, cz = state.x, state.z
-        d = _dist(cx, cz, clear_x, clear_z)
-        if d <= effective_threshold:
+        d = _dist(cx, cz, target_x, target_z)
+        if d <= WAYPOINT_THRESHOLD:
             break
 
     with state.lock:
         state.motion_intent = "stopped"
+        state.forward_speed = FORWARD_SPEED
     _pub_stop()
     time.sleep(0.2)
 
@@ -614,20 +642,29 @@ def _sim_approach_object():
 
 
 def phase_loop():
+    global _docked_at
+
     with state.lock:
         state.x           = STATIONS["start"]["x"]
         state.z           = STATIONS["start"]["z"]
-        state.heading_deg = 180.0   # facing away from -Z wall (south)
+        state.heading_deg = 180.0
         state.motion_intent = "stopped"
 
-    _set_phase("arrived", target_station="station_1")
+    _docked_at = "start"
+    _set_phase("arrived", target_station=_docked_at)
     _pub_stop()
 
-    leg_index   = 0
-    first_leg   = True   # skip DEPART on very first leg
+    leg_index = 0
+    first_leg = True
 
     while True:
-        from_name, to_name = ROUTE[leg_index % len(ROUTE)]
+        _goto_event.wait()
+        _goto_event.clear()
+
+        with _lock:
+            to_name = _goto_target
+
+        from_name = _docked_at
 
         print(f"\n[SIM] ═══ Leg: {from_name} → {to_name} ═══")
 
@@ -636,68 +673,65 @@ def phase_loop():
         with state.lock:
             cx, cz = state.x, state.z
 
-        bear_to_elbow    = _bearing(cx, cz, elbow_x, elbow_z)
-        bear_to_standoff = _bearing(elbow_x, elbow_z, standoff_x, standoff_z)
+        if elbow_x is not None:
+            bear_to_elbow = _bearing(cx, cz, elbow_x, elbow_z)
+        else:
+            bear_to_elbow = None
 
-        print(f"  from=({cx:+.4f},{cz:+.4f})  elbow=({elbow_x:+.4f},{elbow_z:+.4f})"
-              f"  standoff=({standoff_x:+.4f},{standoff_z:+.4f})")
-        print(f"  bear_to_elbow={bear_to_elbow:.1f}°  bear_to_standoff={bear_to_standoff:.1f}°")
+        bear_to_standoff = _bearing(
+            elbow_x if elbow_x is not None else cx,
+            elbow_z if elbow_z is not None else cz,
+            standoff_x, standoff_z
+        )
 
         if not first_leg:
             _set_phase("departing", target_station=to_name)
-            _sim_depart(from_name)
+            _sim_depart_forward(from_name)
 
-            info = STATIONS[from_name]
-            orient_vec = {
-                "-X Wall": (+1,  0), "+X Wall": (-1,  0),
-                "-Z Wall": ( 0, +1), "+Z Wall": ( 0, -1),
-            }
-            vx, vz = orient_vec[info["orientation"]]
-            sx, sz = info["standoff"] if from_name != "start" else (info["x"], info["z"])
             with state.lock:
-                state.x = round(sx - vx * DEPART_DIST, 4)
-                state.z = round(sz - vz * DEPART_DIST, 4)
-                cx, cz  = state.x, state.z
-
+                cx, cz = state.x, state.z
             elbow_x, elbow_z, standoff_x, standoff_z = _compute_elbow(from_name, to_name)
-            bear_to_elbow    = _bearing(cx, cz, elbow_x, elbow_z)
-            bear_to_standoff = _bearing(elbow_x, elbow_z, standoff_x, standoff_z)
+            if elbow_x is not None:
+                bear_to_elbow = _bearing(cx, cz, elbow_x, elbow_z)
+            else:
+                bear_to_elbow = None
+            bear_to_standoff = _bearing(
+                elbow_x if elbow_x is not None else cx,
+                elbow_z if elbow_z is not None else cz,
+                standoff_x, standoff_z
+            )
 
         first_leg = False
 
         _set_phase("phase1", target_station=to_name)
 
-        _pub_spin(left=(bear_to_elbow >= 0), speed=SPIN_SPEED)
-        _sim_spin(bear_to_elbow, spin_speed=SPIN_SPEED)
-
-        with state.lock:
-            cx, cz = state.x, state.z
-
-        _sim_drive(elbow_x, elbow_z, WAYPOINT_THRESHOLD,
-                   bear_to_elbow, reverse=False, mid_switch=True)
-
-        with state.lock:
-            state.x = round(elbow_x, 4)
-            state.z = round(elbow_z, 4)
-
-        time.sleep(0.5)
-
-        _set_phase("phase2", target_station=to_name)
-
-        with state.lock:
-            cx, cz = state.x, state.z
-        bear_to_standoff = _bearing(cx, cz, standoff_x, standoff_z)
-
-        _sim_spin(bear_to_standoff, spin_speed=SPIN_SPEED)
+        if elbow_x is not None:
+            _sim_spin(bear_to_elbow, spin_speed=SPIN_SPEED)
+            _sim_drive(elbow_x, elbow_z, WAYPOINT_THRESHOLD,
+                       bear_to_elbow, reverse=False, mid_switch=True)
+            with state.lock:
+                state.x = round(elbow_x, 4)
+                state.z = round(elbow_z, 4)
+            time.sleep(0.5)
+            _set_phase("phase2", target_station=to_name)
+            with state.lock:
+                cx, cz = state.x, state.z
+            bear_to_standoff = _bearing(cx, cz, standoff_x, standoff_z)
+            _sim_spin(bear_to_standoff, spin_speed=SPIN_SPEED)
+        else:
+            # straight line — spin directly to standoff bearing, skip phase2
+            with state.lock:
+                cx, cz = state.x, state.z
+            bear_to_standoff = _bearing(cx, cz, standoff_x, standoff_z)
+            _sim_spin(bear_to_standoff, spin_speed=SPIN_SPEED)
+            _set_phase("phase2", target_station=to_name)
 
         time.sleep(0.5)
 
         _set_phase("phase3", target_station=to_name)
-
         with state.lock:
             cx, cz = state.x, state.z
         bear_to_standoff = _bearing(cx, cz, standoff_x, standoff_z)
-
         _sim_drive(standoff_x, standoff_z, STATION_THRESHOLD,
                    bear_to_standoff, reverse=False, mid_switch=True)
 
@@ -706,51 +740,51 @@ def phase_loop():
             state.z = round(standoff_z, 4)
 
         _set_phase("aligning", target_station=to_name)
-
-        with state.lock:
-            state.align_area = ALIGN_INITIAL_AREA
-
-        _sim_search_for_object()
-
-        _sim_align_to_object()
-
-        _sim_approach_object()
-
         _set_phase("arrived", target_station=to_name)
         _pub_stop()
 
         with state.lock:
-            state.heading_deg = ARRIVED_HEADING.get(to_name, 0.0)
+            state.heading_deg   = ARRIVED_HEADING.get(to_name, 0.0)
             state.motion_intent = "stopped"
             state.align_area    = 0
 
+        _docked_at = to_name
         print(f"[SIM] ✓ arrived at {to_name}")
 
-        time.sleep(2.0)
+        print("[GOTO] waiting for command...")
 
-        leg_index += 1
+
+def _status_printer():
+    while True:
+        time.sleep(1.0)
+        with state.lock:
+            x = state.x
+            z = state.z
+            h = state.heading_deg
+            intent = state.motion_intent
+        motor_map = {
+            "forward": "forward",
+            "reverse": "reverse",
+            "spin": "spin",
+            "stopped": "stopped",
+        }
+        motors = motor_map.get(intent, "stopped")
+        print(f"[SIM] x={x:+.4f}  z={z:+.4f}  hdg={h:06.1f}°  motors={motors}")
 
 
 def main():
-    print(f"[SIM] connecting to MQTT broker at {BROKER_HOST}:{BROKER_PORT} ...")
+    print("[SIM] MQTT broker localhost:1883 — starting loops ...")
     client.connect(BROKER_HOST, BROKER_PORT, keepalive=60)
     client.loop_start()
 
     time.sleep(1.0)
 
-    print("[SIM] starting sensor loops ...")
-    print("[SIM] publish  → car/slam/pose  @ ~30 Hz")
-    print("[SIM] publish  → car/imu        @ 50 Hz")
-    print("[SIM] publish  → car/nav/phase  @ phase change")
-    print("[SIM] publish  → car/motors     @ command change")
-    print("[SIM] subscribe→ car/mock/inject")
-    print()
-    print("[SIM] inject example:")
-    print("  mosquitto_pub -h localhost -t car/mock/inject -m '{\"anomaly\":\"motor_stall\",\"active\":true}'")
+    print("[SIM] inject: mosquitto_pub -h localhost -t car/mock/inject -m '{\"anomaly\":\"motor_stall\",\"active\":true}'")
     print()
 
     threading.Thread(target=slam_loop, daemon=True).start()
     threading.Thread(target=imu_loop,  daemon=True).start()
+    threading.Thread(target=_status_printer, daemon=True).start()
 
     phase_loop()   # blocks main thread
 
