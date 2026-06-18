@@ -35,6 +35,8 @@ SPIN_RATE_DEG = 0.36  # ~0.36°/tick at 50 Hz → 90° ≈ 5 s
 SEARCH_SPIN_RATE = 0.32  # SEARCH_SPIN=35
 
 
+IMU_DRIFT_INITIAL_RATE = 0.002  # bias rate at drift activation (deg/s)
+IMU_DRIFT_GROWTH_FACTOR = 1.0008  # multiplier applied every second; rate ~doubles every 14 min
 DRIFT_RATE_DEG_PER_SEC = 3.0  # heading drift during arrived/departing
 TRAJECTORY_BEND_PER_SEC = 0.015  # extra lateral shift per second during drives
 PHASE_TIMEOUT_MULTIPLIER = 4.0  # how much longer phase_timeout makes transitions
@@ -109,6 +111,9 @@ _motor_stall_arc_side = None
 _sim_speed = 1.0  # multiplier: 0.25 = slow, 1.0 = normal, 3.0 = fast
 _position_jump_probability = 0.0
 _position_jump_fired = False
+_imu_drift_current_rate = IMU_DRIFT_INITIAL_RATE
+_imu_drift_reset_time = None
+_prev_intent = None
 
 
 def _sleep(seconds):
@@ -207,6 +212,7 @@ def on_connect(c, userdata, flags, rc):
         c.subscribe("car/mock/motor_stall_params")
         c.subscribe("car/mock/sim_speed")
         c.subscribe("car/mock/position_jump_params")
+        c.subscribe("car/mock/imu_drift_reset")
     else:
         print(f"[MQTT] connection failed rc={rc}")
 
@@ -259,6 +265,16 @@ def on_message(c, userdata, msg):
             )
         print(f"[POSITION_JUMP_PARAMS] probability={_position_jump_probability}")
 
+    elif msg.topic == "car/mock/imu_drift_reset":
+        global _imu_drift_reset_time, _imu_drift_current_rate
+        _imu_drift_reset_time = time.monotonic()
+        _imu_drift_current_rate = IMU_DRIFT_INITIAL_RATE
+        with state.lock:
+            heading = state.heading_deg
+            state.heading_deg = heading
+            state.imu_heading_deg = heading
+        print(f"[IMU_DRIFT_RESET] heading zeroed, rate reset")
+
 
 client.on_connect = on_connect
 client.on_message = on_message
@@ -274,6 +290,7 @@ class State:
         self.x = STATIONS["start"]["x"]
         self.z = STATIONS["start"]["z"]
         self.heading_deg = 180.0
+        self.imu_heading_deg = 180.0
 
         self.phase = "arrived"
         self.target_station = "station_1"
@@ -507,6 +524,10 @@ def slam_loop():
 
 
 def imu_loop():
+    global _imu_drift_reset_time, _imu_drift_current_rate, _prev_intent
+    if _imu_drift_reset_time is None:
+        _imu_drift_reset_time = time.monotonic()
+
     while True:
         t0 = time.monotonic()
         now = time.time()
@@ -514,25 +535,30 @@ def imu_loop():
         with state.lock:
             intent = state.motion_intent
             phase = state.phase
+            spin_sign = state.forward_dir_x
 
         if intent == "spin":
-            with state.lock:
-                spin_sign = state.forward_dir_x  # +1 → CCW (left), -1 → CW (right)
             delta = spin_sign * SPIN_RATE_DEG + random.gauss(0, 0.05)
             with state.lock:
                 state.heading_deg = (state.heading_deg + delta) % 360
+                state.imu_heading_deg = (state.imu_heading_deg + delta) % 360
         elif get_anomaly("imu_static_drift") and phase in ("arrived", "departing"):
             if not (get_anomaly("motor_stall") and _motor_stall_force_immobile):
+                _imu_drift_current_rate *= IMU_DRIFT_GROWTH_FACTOR ** IMU_DT
                 with state.lock:
-                    state.heading_deg = (
-                        state.heading_deg + DRIFT_RATE_DEG_PER_SEC * IMU_DT
+                    state.imu_heading_deg = (
+                        state.imu_heading_deg + _imu_drift_current_rate * IMU_DT
                     ) % 360
         else:
-            if not (get_anomaly("motor_stall") and _motor_stall_force_immobile):
+            if _prev_intent == "spin":
                 with state.lock:
-                    state.heading_deg = (
-                        state.heading_deg + random.gauss(0, 0.01)
-                    ) % 360
+                    state.heading_deg = state.imu_heading_deg
+            elif not get_anomaly("imu_static_drift"):
+                with state.lock:
+                    state.imu_heading_deg = state.heading_deg
+            _imu_drift_current_rate = IMU_DRIFT_INITIAL_RATE
+
+        _prev_intent = intent
 
         moving = intent in ("forward", "reverse", "spin")
         if get_anomaly("motor_stall") and _motor_stall_force_immobile:
@@ -546,14 +572,23 @@ def imu_loop():
             raw_ay = round(random.gauss(0.0, 0.001), 5)
 
         with state.lock:
-            heading_out = round(state.heading_deg, 2)
+            heading_out = round(state.imu_heading_deg, 2)
+            heading_true = round(state.heading_deg, 2)
+            accumulated_drift = round(
+                abs(_angle_diff(state.imu_heading_deg, state.heading_deg)), 3
+            )
+
+        elapsed = time.monotonic() - _imu_drift_reset_time if _imu_drift_reset_time else 0.0
 
         payload = {
             "ts": round(now, 6),
             "heading_deg": heading_out,
+            "true_heading_deg": heading_true,
             "raw_ax": raw_ax,
             "raw_ay": raw_ay,
             "moving": moving,
+            "drift_elapsed_s": round(elapsed, 1),
+            "accumulated_drift_deg": accumulated_drift,
         }
         publish("car/imu", payload)
 
@@ -566,7 +601,7 @@ def _sim_spin(target_bearing_deg, spin_speed=SPIN_SPEED):
     global _position_jump_fired
 
     with state.lock:
-        current = state.heading_deg
+        current = state.imu_heading_deg
 
     diff = _angle_diff(target_bearing_deg, current)
     turn_right = diff > 0
@@ -589,7 +624,7 @@ def _sim_spin(target_bearing_deg, spin_speed=SPIN_SPEED):
             lost_tracking = True
             break
         with state.lock:
-            current = state.heading_deg
+            current = state.imu_heading_deg
         df = _angle_diff(target_bearing_deg, current)
         if abs(df) <= SPIN_TOLERANCE:
             break
@@ -597,7 +632,7 @@ def _sim_spin(target_bearing_deg, spin_speed=SPIN_SPEED):
     with state.lock:
         state.motion_intent = "stopped"
         if not lost_tracking:
-            state.heading_deg = target_bearing_deg
+            state.imu_heading_deg = target_bearing_deg
     _pub_stop()
     _sleep(0.2)
 
@@ -912,6 +947,7 @@ def phase_loop():
         state.x = STATIONS["start"]["x"]
         state.z = STATIONS["start"]["z"]
         state.heading_deg = 180.0
+        state.imu_heading_deg = 180.0
         state.motion_intent = "stopped"
 
     _docked_at = "start"
@@ -1054,6 +1090,7 @@ def phase_loop():
 
         with state.lock:
             state.heading_deg = ARRIVED_HEADING.get(to_name, 0.0)
+            state.imu_heading_deg = state.heading_deg
             state.motion_intent = "stopped"
             state.align_area = 0
 

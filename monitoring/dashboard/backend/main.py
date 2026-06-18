@@ -55,6 +55,8 @@ _motor_stall_arc_side: str | None = None
 _sim_speed: float = 1.0
 _position_jump_probability: float = 0.0
 _position_jump_last: float | None = None
+_imu_drift_elapsed_s: float = 0.0
+_imu_drift_accumulated_deg: float = 0.0
 
 
 def _on_connect(client: mqtt.Client, userdata, flags, rc):
@@ -73,7 +75,7 @@ def _on_disconnect(client: mqtt.Client, userdata, rc):
 
 def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
     """Called in the paho network thread — must be non-blocking."""
-    global _motor_stall_severity, _motor_stall_freeze_streak, _motor_stall_arc_side, _sim_speed, _position_jump_probability, _position_jump_last
+    global _motor_stall_severity, _motor_stall_freeze_streak, _motor_stall_arc_side, _sim_speed, _position_jump_probability, _position_jump_last, _imu_drift_elapsed_s, _imu_drift_accumulated_deg
     topic = msg.topic
 
     if topic == "car/mock/inject":
@@ -108,6 +110,10 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
 
     elif topic == "car/anomaly/position_jump":
         _position_jump_last = payload.get("ts", time.time())
+
+    elif topic == "car/imu":
+        _imu_drift_elapsed_s = float(payload.get("drift_elapsed_s", 0.0))
+        _imu_drift_accumulated_deg = float(payload.get("accumulated_drift_deg", 0.0))
 
     log.info("MQTT ← %s  %s", topic, json.dumps(payload))
 
@@ -396,6 +402,23 @@ async def set_position_jump_params(payload: dict):
             json.dumps({"probability": prob}),
         )
     return {"ok": True, "probability": prob}
+
+
+@app.post("/control/imu_drift_reset")
+async def reset_imu_drift():
+    if _mqtt_client is not None:
+        _mqtt_client.publish("car/mock/imu_drift_reset", json.dumps({}))
+    return {"ok": True}
+
+
+@app.get("/live")
+async def live():
+    return {
+        "imu_drift": {
+            "elapsed_s": _imu_drift_elapsed_s,
+            "accumulated_deg": _imu_drift_accumulated_deg,
+        }
+    }
 
 
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
