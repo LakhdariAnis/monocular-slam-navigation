@@ -166,17 +166,14 @@ function computeElbow(fromName, toName) {
 
     // ── Status Bar ──
     function StatusBar({ slam, phase, motors, slamSeq, wsConnected }) {
-      // SLAM tracking status
       const slamOk = slam?.ok;
       let slamLabel, slamColor;
       if (slamOk === true)       { slamLabel = "SLAM TRACKING: OK";    slamColor = "#4ade80"; }
       else if (slamOk === false) { slamLabel = "SLAM TRACKING: LOST";  slamColor = "#ff6b6b"; }
       else                       { slamLabel = "SLAM TRACKING: RELOC"; slamColor = "#facc15"; }
 
-      // Phase
       const phaseLabel = phase?.phase ? phase.phase.toUpperCase().replace(/_/g, " ") : "—";
 
-      // Motor status
       const totalPwm = motors?.total ?? 0;
       const innerPwm = motors?.inner ?? 0;
       const motorRunning = totalPwm > 0;
@@ -631,6 +628,166 @@ function computeElbow(fromName, toName) {
       );
     }
 
+    // ── Motor Stall Panel ──
+    function MotorStallPanel({ motorStallActive }) {
+      const [motorStallStatus, setMotorStallStatus] = useState("ok");
+      const [motorStallFreezeStreak, setMotorStallFreezeStreak] = useState(0);
+      const [severity, setSeverity] = useState(0.5);
+      const [motorStallArcSide, setMotorStallArcSide] = useState(null);
+
+      // Poll /live/motor_stall when anomaly is ON
+      useEffect(() => {
+        if (!motorStallActive) {
+          setMotorStallStatus("ok");
+          setMotorStallFreezeStreak(0);
+          setMotorStallArcSide(null);
+          return;
+        }
+        let alive = true;
+        const poll = () => {
+          fetch(`${API_BASE}/live/motor_stall`)
+            .then(r => r.json())
+            .then(d => {
+              if (alive) {
+                setMotorStallStatus(d.severity);
+                setMotorStallFreezeStreak(d.freeze_streak);
+                setMotorStallArcSide(d.arc_side);
+              }
+            })
+            .catch(() => {});
+        };
+        poll();
+        const id = setInterval(poll, 500);
+        return () => { alive = false; clearInterval(id); };
+      }, [motorStallActive]);
+
+      // Publish on first activation when toggle turns ON
+      const prevActiveRef = useRef(motorStallActive);
+      useEffect(() => {
+        if (motorStallActive && !prevActiveRef.current) {
+          fetch(`${API_BASE}/api/publish`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              topic: "car/mock/motor_stall_params",
+              payload: { severity: parseFloat(severity.toFixed(2)) },
+            }),
+          }).catch(() => {});
+        }
+        prevActiveRef.current = motorStallActive;
+      }, [motorStallActive, severity]);
+
+      const handleSeverityChange = (e) => {
+        const val = parseFloat(e.target.value);
+        setSeverity(val);
+        if (!motorStallActive) return;
+        fetch(`${API_BASE}/api/publish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            topic: "car/mock/motor_stall_params",
+            payload: { severity: parseFloat(val.toFixed(2)) },
+          }),
+        }).catch(() => {});
+      };
+
+      const status = motorStallStatus;
+      const colorMap = { ok: "#4ade80", warn: "#facc15", crit: "#ff6b6b" };
+      const statusColor = colorMap[status] || colorMap.ok;
+
+      return (
+        <div className="glass-panel p-4 rounded-xl flex flex-col gap-3">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="font-label text-xs text-on-surface-variant flex items-center gap-2">
+              <span className="material-symbols-outlined text-sm">warning</span>
+              Motor Stall
+            </h3>
+            {motorStallActive && motorStallArcSide && (
+              <span
+                className="px-2 py-0.5 rounded text-[10px] font-label tracking-wider ml-auto"
+                style={{
+                  background: "rgba(125,211,252,0.15)",
+                  border: "1px solid rgba(125,211,252,0.3)",
+                  color: "#7dd3fc",
+                }}
+              >
+                {motorStallArcSide === "RIGHT" ? "RIGHT ▶" : "◀ LEFT"}
+              </span>
+            )}
+          </div>
+
+          {/* Status box */}
+          <div
+            className="flex items-center justify-between p-3 rounded-lg"
+            style={{
+              background: `${statusColor}10`,
+              border: `1px solid ${statusColor}40`,
+            }}
+          >
+            <span className="font-body text-sm text-on-surface-variant">Status</span>
+            <span className="font-display text-2xl" style={{ color: statusColor }}>
+              {status === "ok" ? "Normal" : status === "warn" ? "Stall Detected" : "Critical Stall"}
+            </span>
+          </div>
+
+          {/* Alert banner — warn */}
+          {status === "warn" && (
+            <div
+              className="px-3 py-2 rounded text-sm font-body"
+              style={{
+                background: "rgba(250,204,21,0.12)",
+                border: "1px solid rgba(250,204,21,0.35)",
+                color: "#facc15",
+              }}
+            >
+              ⚠ Stall Detected{motorStallArcSide ? ` — arc ${motorStallArcSide === "RIGHT" ? "▶" : "◀"} ${motorStallArcSide}` : ""}
+            </div>
+          )}
+
+          {/* Alert banner — crit */}
+          {status === "crit" && (
+            <div
+              className="px-3 py-2 rounded text-sm font-body"
+              style={{
+                background: "rgba(255,107,107,0.12)",
+                border: "1px solid rgba(255,107,107,0.35)",
+                color: "#ff6b6b",
+              }}
+            >
+              ✖ Critical Stall — Freeze streak: {motorStallFreezeStreak} ticks{motorStallArcSide ? ` (arc ${motorStallArcSide === "RIGHT" ? "▶" : "◀"} ${motorStallArcSide})` : ""}
+            </div>
+          )}
+
+          {/* Severity slider — only visible when motor_stall is ON */}
+          {motorStallActive && (
+            <div className="flex flex-col gap-2 mt-1 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+              <div className="flex items-center justify-between">
+                <span className="font-label text-xs text-on-surface-variant flex items-center gap-1">
+                  <span className="material-symbols-outlined text-sm" style={{ color: "#7dd3fc" }}>tune</span>
+                  Severity — controls arc tightness &amp; freeze rate
+                </span>
+                <span className="font-display text-sm" style={{ color: "#7dd3fc" }}>severity: {severity.toFixed(2)}</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={severity}
+                onChange={handleSeverityChange}
+                className="w-full accent-cyan-400"
+                style={{ accentColor: "#7dd3fc" }}
+              />
+              <div className="flex justify-between text-xs font-body text-on-surface-variant opacity-70">
+                <span>0.0</span>
+                <span>1.0</span>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ── Phase Timeline ──
     function PhaseTimeline({ historyData, livePhase }) {
       const [segments, setSegments] = useState([]);
@@ -751,8 +908,11 @@ function computeElbow(fromName, toName) {
 
         if (newEntries.length > 0) {
           setEntries(prev => {
-            const existing = new Set(prev.map(e => e.id));
-            const toAdd = newEntries.filter(e => !existing.has(e.id));
+            const toAdd = newEntries.filter(e => {
+              const last = prev.find(p => p.key === e.key);
+              if (last && last.severity === e.severity && (e.ts - last.ts) < 2) return false;
+              return true;
+            });
             if (toAdd.length === 0) return prev;
             return [...toAdd, ...prev].slice(0, 100);
           });
@@ -820,12 +980,48 @@ function computeElbow(fromName, toName) {
 
     // ── Anomaly Injection Panel ──
     function AnomalyInjectionPanel({ toggles, onToggle }) {
+      const [simSpeed, setSimSpeed] = useState(1.0);
+
+      const handleSimSpeedChange = (e) => {
+        const val = parseFloat(e.target.value);
+        setSimSpeed(val);
+        fetch(`${API_BASE}/control/sim_speed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ speed: val }),
+        }).catch(() => {});
+      };
+
       return (
         <aside
           id="anomaly-injection-panel"
           className="w-80 border-l border-outline-variant p-gutter flex flex-col gap-6"
           style={{ background: "rgba(32, 44, 66, 0.4)" }}
         >
+          <div>
+            <h3 className="font-label text-sm text-on-surface uppercase tracking-widest flex items-center gap-2 mb-2">
+              <span className="material-symbols-outlined text-sm text-secondary">speed</span>
+              Simulation Speed
+            </h3>
+            <p className="font-label text-xs text-on-surface-variant mb-2">
+              {simSpeed.toFixed(2)}×
+            </p>
+            <input
+              type="range"
+              min="0.25"
+              max="4.0"
+              step="0.25"
+              value={simSpeed}
+              onChange={handleSimSpeedChange}
+              className="w-full accent-cyan-400"
+              style={{ accentColor: "#7dd3fc" }}
+            />
+            <div className="flex justify-between text-xs font-body text-on-surface-variant opacity-70 mb-4">
+              <span>0.25×</span>
+              <span>4.0×</span>
+            </div>
+          </div>
+
           <div>
             <h3 className="font-label text-sm text-on-surface uppercase tracking-widest flex items-center gap-2 mb-2">
               <span className="material-symbols-outlined text-sm text-secondary">bug_report</span>
@@ -1022,7 +1218,6 @@ function computeElbow(fromName, toName) {
     function App() {
       const { connected, snapshot } = useWebSocket();
 
-      // Extract live data from snapshot
       const liveSlam   = snapshot["car/slam/pose"] || null;
       const liveImu    = snapshot["car/imu"] || null;
       const liveMotors = snapshot["car/motors"] || null;
@@ -1137,6 +1332,7 @@ function computeElbow(fromName, toName) {
                   <IMUHeadingChart historyData={imuHistory} liveImu={liveImu} />
                   <MotorPWMChart historyData={motorHistory} liveMotors={liveMotors} />
                   <SlamRatePanel slamLowFeatureActive={toggles.slam_low_feature} />
+                  <MotorStallPanel motorStallActive={toggles.motor_stall} />
                 </div>
               </div>
 

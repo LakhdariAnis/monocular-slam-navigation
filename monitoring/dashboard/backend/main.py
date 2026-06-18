@@ -49,6 +49,12 @@ _loop: asyncio.AbstractEventLoop | None = None
 # Reference to the paho MQTT client (for publishing inject commands)
 _mqtt_client: mqtt.Client | None = None
 
+_motor_stall_severity: str = "ok"
+_motor_stall_freeze_streak: int = 0
+_motor_stall_arc_side: str | None = None
+_sim_speed: float = 1.0
+
+
 def _on_connect(client: mqtt.Client, userdata, flags, rc):
     if rc == 0:
         log.info("MQTT connected to %s:%s", MQTT_BROKER_HOST, MQTT_BROKER_PORT)
@@ -65,10 +71,17 @@ def _on_disconnect(client: mqtt.Client, userdata, rc):
 
 def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
     """Called in the paho network thread — must be non-blocking."""
+    global _motor_stall_severity, _motor_stall_freeze_streak, _motor_stall_arc_side, _sim_speed
     topic = msg.topic
 
-    # Ignore the inject control topic
     if topic == "car/mock/inject":
+        try:
+            payload = json.loads(msg.payload.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return
+        if payload.get("anomaly") == "motor_stall" and not payload.get("active"):
+            _motor_stall_severity = "ok"
+            _motor_stall_freeze_streak = 0
         return
 
     try:
@@ -76,6 +89,20 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         log.warning("MQTT bad JSON on %s: %s", topic, exc)
         return
+
+    if topic == "car/anomaly/motor_stall":
+        sev = payload.get("severity", "WARN")
+        _motor_stall_severity = sev.lower()
+        _motor_stall_freeze_streak = payload.get("freeze_streak", 0)
+
+    elif topic == "car/mock/motor_stall_arc":
+        raw = payload.get("arc_side")
+        if raw == 1:
+            _motor_stall_arc_side = "RIGHT"
+        elif raw == -1:
+            _motor_stall_arc_side = "LEFT"
+        else:
+            _motor_stall_arc_side = None
 
     log.info("MQTT ← %s  %s", topic, json.dumps(payload))
 
@@ -319,6 +346,30 @@ async def live_slam_rate():
     else:
         status = "critical"
     return {"msgs_per_sec": msgs_per_sec, "status": status}
+
+
+@app.get("/live/motor_stall")
+async def live_motor_stall():
+    return {
+        "severity": _motor_stall_severity,
+        "freeze_streak": _motor_stall_freeze_streak,
+        "arc_side": _motor_stall_arc_side,
+    }
+
+
+@app.get("/live/sim_speed")
+async def live_sim_speed():
+    return {"sim_speed": _sim_speed}
+
+
+@app.post("/control/sim_speed")
+async def set_sim_speed(payload: dict):
+    global _sim_speed
+    speed = max(0.25, min(4.0, float(payload["speed"])))
+    _sim_speed = speed
+    if _mqtt_client is not None:
+        _mqtt_client.publish("car/mock/sim_speed", json.dumps({"speed": speed}))
+    return {"ok": True, "speed": speed}
 
 
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"

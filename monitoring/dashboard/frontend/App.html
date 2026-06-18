@@ -314,17 +314,14 @@
 
     // ── Status Bar ──
     function StatusBar({ slam, phase, motors, slamSeq, wsConnected }) {
-      // SLAM tracking status
       const slamOk = slam?.ok;
       let slamLabel, slamColor;
       if (slamOk === true)       { slamLabel = "SLAM TRACKING: OK";    slamColor = "#4ade80"; }
       else if (slamOk === false) { slamLabel = "SLAM TRACKING: LOST";  slamColor = "#ff6b6b"; }
       else                       { slamLabel = "SLAM TRACKING: RELOC"; slamColor = "#facc15"; }
 
-      // Phase
       const phaseLabel = phase?.phase ? phase.phase.toUpperCase().replace(/_/g, " ") : "—";
 
-      // Motor status
       const totalPwm = motors?.total ?? 0;
       const innerPwm = motors?.inner ?? 0;
       const motorRunning = totalPwm > 0;
@@ -892,7 +889,6 @@
     function App() {
       const { connected, snapshot } = useWebSocket();
 
-      // Extract live data from snapshot
       const liveSlam   = snapshot["car/slam/pose"] || null;
       const liveImu    = snapshot["car/imu"] || null;
       const liveMotors = snapshot["car/motors"] || null;

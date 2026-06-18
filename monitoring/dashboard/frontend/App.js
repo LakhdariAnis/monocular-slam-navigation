@@ -784,6 +784,161 @@ function SlamRatePanel({
   }, "decay: ", decay.toFixed(4), "  |  recover: ", recover.toFixed(4))));
 }
 
+// ── Motor Stall Panel ──
+function MotorStallPanel({
+  motorStallActive
+}) {
+  const [motorStallStatus, setMotorStallStatus] = useState("ok");
+  const [motorStallFreezeStreak, setMotorStallFreezeStreak] = useState(0);
+  const [severity, setSeverity] = useState(0.5);
+  const [motorStallArcSide, setMotorStallArcSide] = useState(null);
+
+  // Poll /live/motor_stall when anomaly is ON
+  useEffect(() => {
+    if (!motorStallActive) {
+      setMotorStallStatus("ok");
+      setMotorStallFreezeStreak(0);
+      setMotorStallArcSide(null);
+      return;
+    }
+    let alive = true;
+    const poll = () => {
+      fetch(`${API_BASE}/live/motor_stall`).then(r => r.json()).then(d => {
+        if (alive) {
+          setMotorStallStatus(d.severity);
+          setMotorStallFreezeStreak(d.freeze_streak);
+          setMotorStallArcSide(d.arc_side);
+        }
+      }).catch(() => {});
+    };
+    poll();
+    const id = setInterval(poll, 500);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [motorStallActive]);
+
+  // Publish on first activation when toggle turns ON
+  const prevActiveRef = useRef(motorStallActive);
+  useEffect(() => {
+    if (motorStallActive && !prevActiveRef.current) {
+      fetch(`${API_BASE}/api/publish`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          topic: "car/mock/motor_stall_params",
+          payload: {
+            severity: parseFloat(severity.toFixed(2))
+          }
+        })
+      }).catch(() => {});
+    }
+    prevActiveRef.current = motorStallActive;
+  }, [motorStallActive, severity]);
+  const handleSeverityChange = e => {
+    const val = parseFloat(e.target.value);
+    setSeverity(val);
+    if (!motorStallActive) return;
+    fetch(`${API_BASE}/api/publish`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        topic: "car/mock/motor_stall_params",
+        payload: {
+          severity: parseFloat(val.toFixed(2))
+        }
+      })
+    }).catch(() => {});
+  };
+  const status = motorStallStatus;
+  const colorMap = {
+    ok: "#4ade80",
+    warn: "#facc15",
+    crit: "#ff6b6b"
+  };
+  const statusColor = colorMap[status] || colorMap.ok;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "glass-panel p-4 rounded-xl flex flex-col gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 mb-1"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-label text-xs text-on-surface-variant flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "material-symbols-outlined text-sm"
+  }, "warning"), "Motor Stall"), motorStallActive && motorStallArcSide && /*#__PURE__*/React.createElement("span", {
+    className: "px-2 py-0.5 rounded text-[10px] font-label tracking-wider ml-auto",
+    style: {
+      background: "rgba(125,211,252,0.15)",
+      border: "1px solid rgba(125,211,252,0.3)",
+      color: "#7dd3fc"
+    }
+  }, motorStallArcSide === "RIGHT" ? "RIGHT ▶" : "◀ LEFT")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between p-3 rounded-lg",
+    style: {
+      background: `${statusColor}10`,
+      border: `1px solid ${statusColor}40`
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-body text-sm text-on-surface-variant"
+  }, "Status"), /*#__PURE__*/React.createElement("span", {
+    className: "font-display text-2xl",
+    style: {
+      color: statusColor
+    }
+  }, status === "ok" ? "Normal" : status === "warn" ? "Stall Detected" : "Critical Stall")), status === "warn" && /*#__PURE__*/React.createElement("div", {
+    className: "px-3 py-2 rounded text-sm font-body",
+    style: {
+      background: "rgba(250,204,21,0.12)",
+      border: "1px solid rgba(250,204,21,0.35)",
+      color: "#facc15"
+    }
+  }, "⚠ Stall Detected", motorStallArcSide ? ` — arc ${motorStallArcSide === "RIGHT" ? "▶" : "◀"} ${motorStallArcSide}` : ""), status === "crit" && /*#__PURE__*/React.createElement("div", {
+    className: "px-3 py-2 rounded text-sm font-body",
+    style: {
+      background: "rgba(255,107,107,0.12)",
+      border: "1px solid rgba(255,107,107,0.35)",
+      color: "#ff6b6b"
+    }
+  }, "✖ Critical Stall — Freeze streak: ", motorStallFreezeStreak, " ticks", motorStallArcSide ? ` (arc ${motorStallArcSide === "RIGHT" ? "▶" : "◀"} ${motorStallArcSide})` : ""), motorStallActive && /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2 mt-1 pt-3",
+    style: {
+      borderTop: "1px solid rgba(255,255,255,0.08)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-label text-xs text-on-surface-variant flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "material-symbols-outlined text-sm",
+    style: {
+      color: "#7dd3fc"
+    }
+  }, "tune"), "Severity — controls arc tightness & freeze rate"), /*#__PURE__*/React.createElement("span", {
+    className: "font-display text-sm",
+    style: {
+      color: "#7dd3fc"
+    }
+  }, "severity: ", severity.toFixed(2))), /*#__PURE__*/React.createElement("input", {
+    type: "range",
+    min: "0",
+    max: "1",
+    step: "0.01",
+    value: severity,
+    onChange: handleSeverityChange,
+    className: "w-full accent-cyan-400",
+    style: {
+      accentColor: "#7dd3fc"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between text-xs font-body text-on-surface-variant opacity-70"
+  }, /*#__PURE__*/React.createElement("span", null, "0.0"), /*#__PURE__*/React.createElement("span", null, "1.0"))));
+}
+
 // ── Phase Timeline ──
 function PhaseTimeline({
   historyData,
@@ -905,8 +1060,11 @@ function AnomalyFeed({
     }
     if (newEntries.length > 0) {
       setEntries(prev => {
-        const existing = new Set(prev.map(e => e.id));
-        const toAdd = newEntries.filter(e => !existing.has(e.id));
+        const toAdd = newEntries.filter(e => {
+          const last = prev.find(p => p.key === e.key);
+          if (last && last.severity === e.severity && e.ts - last.ts < 2) return false;
+          return true;
+        });
         if (toAdd.length === 0) return prev;
         return [...toAdd, ...prev].slice(0, 100);
       });
@@ -965,6 +1123,20 @@ function AnomalyInjectionPanel({
   toggles,
   onToggle
 }) {
+  const [simSpeed, setSimSpeed] = useState(1.0);
+  const handleSimSpeedChange = e => {
+    const val = parseFloat(e.target.value);
+    setSimSpeed(val);
+    fetch(`${API_BASE}/control/sim_speed`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        speed: val
+      })
+    }).catch(() => {});
+  };
   return /*#__PURE__*/React.createElement("aside", {
     id: "anomaly-injection-panel",
     className: "w-80 border-l border-outline-variant p-gutter flex flex-col gap-6",
@@ -972,6 +1144,25 @@ function AnomalyInjectionPanel({
       background: "rgba(32, 44, 66, 0.4)"
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
+    className: "font-label text-sm text-on-surface uppercase tracking-widest flex items-center gap-2 mb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "material-symbols-outlined text-sm text-secondary"
+  }, "speed"), "Simulation Speed"), /*#__PURE__*/React.createElement("p", {
+    className: "font-label text-xs text-on-surface-variant mb-2"
+  }, simSpeed.toFixed(2), "×"), /*#__PURE__*/React.createElement("input", {
+    type: "range",
+    min: "0.25",
+    max: "4.0",
+    step: "0.25",
+    value: simSpeed,
+    onChange: handleSimSpeedChange,
+    className: "w-full accent-cyan-400",
+    style: {
+      accentColor: "#7dd3fc"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between text-xs font-body text-on-surface-variant opacity-70 mb-4"
+  }, /*#__PURE__*/React.createElement("span", null, "0.25×"), /*#__PURE__*/React.createElement("span", null, "4.0×"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
     className: "font-label text-sm text-on-surface uppercase tracking-widest flex items-center gap-2 mb-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "material-symbols-outlined text-sm text-secondary"
@@ -1320,6 +1511,8 @@ function App() {
     liveMotors: liveMotors
   }), /*#__PURE__*/React.createElement(SlamRatePanel, {
     slamLowFeatureActive: toggles.slam_low_feature
+  }), /*#__PURE__*/React.createElement(MotorStallPanel, {
+    motorStallActive: toggles.motor_stall
   }))), /*#__PURE__*/React.createElement(AnomalyFeed, {
     snapshot: snapshot
   })), /*#__PURE__*/React.createElement(AnomalyInjectionPanel, {
