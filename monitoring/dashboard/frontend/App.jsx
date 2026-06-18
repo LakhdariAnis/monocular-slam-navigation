@@ -18,6 +18,7 @@
 
     const MAX_PATH_POINTS = 500;
     const MAX_CHART_POINTS = 200;
+    const POSITION_JUMP_MAGNITUDE = 2.0;
 
     const ANOMALY_TYPES = [
       { key: "tracking_loss",    label: "Tracking Loss",     color: "#ff6b6b" },
@@ -212,7 +213,6 @@ function computeElbow(fromName, toName) {
     function PositionPathChart({ historyData, liveSlam, slamRateStatus }) {
       const [points, setPoints] = useState([]);
 
-      // Load history once
       useEffect(() => {
         if (historyData.length > 0) {
           const pts = historyData
@@ -222,7 +222,6 @@ function computeElbow(fromName, toName) {
         }
       }, [historyData]);
 
-      // Append live points
       useEffect(() => {
         if (liveSlam && liveSlam.ok && liveSlam.x != null && liveSlam.z != null) {
           setPoints(prev => {
@@ -262,17 +261,14 @@ function computeElbow(fromName, toName) {
 
       return (
         <div id="position-path-chart" className="lg:col-span-8 glass-panel rounded-xl overflow-hidden flex flex-col relative min-h-[400px]">
-          {/* Header */}
           <div className="p-4 border-b border-outline-variant flex justify-between items-center z-10"
                style={{ background: "rgba(32, 44, 66, 0.3)" }}>
             <h3 className="font-headline text-lg text-primary glow-text-primary">Position Path (X vs Z)</h3>
             <span className="font-label text-xs text-on-surface-variant">10-minute history | Live</span>
           </div>
 
-          {/* Grid background */}
           <div className="absolute inset-0 top-[60px] chart-grid-bg opacity-80" style={{ background: "#0a0e1a" }} />
 
-          {/* Chart */}
           <div className="flex-1 relative z-[1] min-h-[340px]">
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 20, right: 30, bottom: 20, left: 20 }}>
@@ -319,7 +315,6 @@ function computeElbow(fromName, toName) {
             </ResponsiveContainer>
           </div>
 
-          {/* Position overlay */}
           {currentPos && (
             <div className="absolute bottom-4 left-4 z-10 glass-panel-elevated p-3 rounded-lg flex flex-col gap-2">
               <div className="text-xs font-label text-on-surface-variant">CURRENT POS</div>
@@ -556,7 +551,6 @@ function computeElbow(fromName, toName) {
             SLAM Publish Rate
           </h3>
 
-          {/* Metric box */}
           <div
             className="flex items-center justify-between p-3 rounded-lg"
             style={{
@@ -570,7 +564,6 @@ function computeElbow(fromName, toName) {
             </span>
           </div>
 
-          {/* Alert banner */}
           {status === "warn" && (
             <div
               className="px-3 py-2 rounded text-sm font-body"
@@ -716,7 +709,6 @@ function computeElbow(fromName, toName) {
             )}
           </div>
 
-          {/* Status box */}
           <div
             className="flex items-center justify-between p-3 rounded-lg"
             style={{
@@ -730,7 +722,6 @@ function computeElbow(fromName, toName) {
             </span>
           </div>
 
-          {/* Alert banner — warn */}
           {status === "warn" && (
             <div
               className="px-3 py-2 rounded text-sm font-body"
@@ -744,7 +735,6 @@ function computeElbow(fromName, toName) {
             </div>
           )}
 
-          {/* Alert banner — crit */}
           {status === "crit" && (
             <div
               className="px-3 py-2 rounded text-sm font-body"
@@ -781,6 +771,150 @@ function computeElbow(fromName, toName) {
               <div className="flex justify-between text-xs font-body text-on-surface-variant opacity-70">
                 <span>0.0</span>
                 <span>1.0</span>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── Position Jump Panel ──
+    function PositionJumpPanel({ positionJumpActive }) {
+      const [probBar, setProbBar] = useState(50);
+      const [lastJump, setLastJump] = useState(null);
+      const [probability, setProbability] = useState(0.5);
+
+      // Poll /live/position_jump when anomaly is ON
+      useEffect(() => {
+        if (!positionJumpActive) {
+          setLastJump(null);
+          return;
+        }
+        let alive = true;
+        const poll = () => {
+          fetch(`${API_BASE}/live/position_jump`)
+            .then(r => r.json())
+            .then(d => {
+              if (alive) {
+                setProbability(d.probability);
+                setLastJump(d.last_jump);
+                setProbBar(Math.round(d.probability * 100));
+              }
+            })
+            .catch(() => {});
+        };
+        poll();
+        const id = setInterval(poll, 500);
+        return () => { alive = false; clearInterval(id); };
+      }, [positionJumpActive]);
+
+      // Publish on first activation when toggle turns ON
+      const prevActiveRef = useRef(positionJumpActive);
+      useEffect(() => {
+        if (positionJumpActive && !prevActiveRef.current) {
+          fetch(`${API_BASE}/api/publish`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              topic: "car/mock/position_jump_params",
+              payload: { probability: parseFloat(probability.toFixed(2)) },
+            }),
+          }).catch(() => {});
+        }
+        prevActiveRef.current = positionJumpActive;
+      }, [positionJumpActive, probability]);
+
+      const handleProbChange = (e) => {
+        const val = parseInt(e.target.value, 10);
+        setProbBar(val);
+        const probVal = val / 100;
+        setProbability(probVal);
+        if (!positionJumpActive) return;
+        fetch(`${API_BASE}/api/publish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            topic: "car/mock/position_jump_params",
+            payload: { probability: parseFloat(probVal.toFixed(2)) },
+          }),
+        }).catch(() => {});
+      };
+
+      const now = Date.now() / 1000;
+      const jumpRecent = lastJump && (now - lastJump) < 3;
+
+      return (
+        <div className="glass-panel p-4 rounded-xl flex flex-col gap-3">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="font-label text-xs text-on-surface-variant flex items-center gap-2">
+              <span className="material-symbols-outlined text-sm">open_in_full</span>
+              Position Jump
+            </h3>
+            {lastJump && (
+              <span
+                className="px-2 py-0.5 rounded text-[10px] font-label tracking-wider ml-auto"
+                style={{
+                  background: "rgba(125,211,252,0.15)",
+                  border: "1px solid rgba(125,211,252,0.3)",
+                  color: "#7dd3fc",
+                }}
+              >
+                {fmtTime(lastJump)}
+              </span>
+            )}
+          </div>
+
+          <div
+            className="flex items-center justify-between p-3 rounded-lg"
+            style={{
+              background: `${jumpRecent ? "rgba(255,107,107,0.10)" : "rgba(74,222,128,0.10)"}`,
+              border: `1px solid ${jumpRecent ? "rgba(255,107,107,0.40)" : "rgba(74,222,128,0.40)"}`,
+            }}
+          >
+            <span className="font-body text-sm text-on-surface-variant">Status</span>
+            <span
+              className="font-display text-2xl"
+              style={{ color: jumpRecent ? "#ff6b6b" : "#4ade80" }}
+            >
+              {jumpRecent ? "Jump Detected" : "Normal"}
+            </span>
+          </div>
+
+          {jumpRecent && (
+            <div
+              className="px-3 py-2 rounded text-sm font-body"
+              style={{
+                background: "rgba(255,107,107,0.12)",
+                border: "1px solid rgba(255,107,107,0.35)",
+                color: "#ff6b6b",
+              }}
+            >
+              ✖ Position Jump — {POSITION_JUMP_MAGNITUDE}m displacement
+            </div>
+          )}
+
+          {/* Probability slider — only visible when position_jump is ON */}
+          {positionJumpActive && (
+            <div className="flex flex-col gap-2 mt-1 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+              <div className="flex items-center justify-between">
+                <span className="font-label text-xs text-on-surface-variant flex items-center gap-1">
+                  <span className="material-symbols-outlined text-sm" style={{ color: "#7dd3fc" }}>tune</span>
+                  Jump Probability — chance per spin
+                </span>
+                <span className="font-display text-sm" style={{ color: "#7dd3fc" }}>{probBar}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={probBar}
+                onChange={handleProbChange}
+                className="w-full accent-cyan-400"
+                style={{ accentColor: "#7dd3fc" }}
+              />
+              <div className="flex justify-between text-xs font-body text-on-surface-variant opacity-70">
+                <span>0%</span>
+                <span>100%</span>
               </div>
             </div>
           )}
@@ -827,11 +961,10 @@ function computeElbow(fromName, toName) {
             // Only add if different from last phase
             const lastPhase = updated.length > 0 ? updated[updated.length - 1].phase : null;
             if (livePhase.phase !== lastPhase) {
-              // Update last segment duration
-              if (updated.length > 0) {
-                const last = updated[updated.length - 1];
-                updated[updated.length - 1] = { ...last, duration: now - last.start };
-              }
+            if (updated.length > 0) {
+              const last = updated[updated.length - 1];
+              updated[updated.length - 1] = { ...last, duration: now - last.start };
+            }
               updated.push({ phase: livePhase.phase, start: now, duration: 0 });
             }
             return updated;
@@ -891,7 +1024,6 @@ function computeElbow(fromName, toName) {
 
       useEffect(() => {
         if (!snapshot) return;
-        // Find anomaly keys: car/anomaly/*
         const anomalyKeys = Object.keys(snapshot).filter(k => k.startsWith("car/anomaly/"));
         if (anomalyKeys.length === 0) return;
 
@@ -1223,10 +1355,17 @@ function computeElbow(fromName, toName) {
       const liveMotors = snapshot["car/motors"] || null;
       const livePhase  = snapshot["car/nav/phase"] || null;
 
-      // SLAM sequence
       const slamSeq = liveSlam?.seq ?? null;
 
-      // Load history on mount
+      // Position jump tracking from WebSocket
+      const [positionJumpLast, setPositionJumpLast] = useState(null);
+      useEffect(() => {
+        const anomaly = snapshot["car/anomaly/position_jump"];
+        if (anomaly && anomaly.ts) {
+          setPositionJumpLast(anomaly.ts);
+        }
+      }, [snapshot]);
+
       const [slamHistory]   = useHistory("/history/slam?minutes=10");
       const [imuHistory]    = useHistory("/history/imu?minutes=10");
       const [motorHistory]  = useHistory("/history/motors?minutes=10");
@@ -1269,7 +1408,6 @@ function computeElbow(fromName, toName) {
 
       return (
         <React.Fragment>
-          {/* Top App Bar */}
           <nav
             className="fixed top-0 w-full z-50 border-b border-outline-variant"
             style={{
@@ -1306,11 +1444,8 @@ function computeElbow(fromName, toName) {
             </div>
           </nav>
 
-          {/* Main Content Area */}
           <div className="flex-1 flex pt-20">
-            {/* Left Dashboard Content */}
             <main className="flex-1 flex flex-col p-gutter gap-panel-gap min-h-[calc(100vh-5rem)]">
-              {/* Status Bar */}
               <StatusBar
                 slam={liveSlam}
                 phase={livePhase}
@@ -1319,9 +1454,7 @@ function computeElbow(fromName, toName) {
                 wsConnected={connected}
               />
 
-              {/* Dashboard Grid */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-panel-gap flex-1">
-                {/* Position Path Chart */}
                 <div className="lg:col-span-8 flex flex-col gap-panel-gap">
                   <MapCanvas snapshot={snapshot} />
                 </div>
@@ -1333,14 +1466,13 @@ function computeElbow(fromName, toName) {
                   <MotorPWMChart historyData={motorHistory} liveMotors={liveMotors} />
                   <SlamRatePanel slamLowFeatureActive={toggles.slam_low_feature} />
                   <MotorStallPanel motorStallActive={toggles.motor_stall} />
+                  <PositionJumpPanel positionJumpActive={toggles.position_jump} />
                 </div>
               </div>
 
-              {/* Anomaly Feed */}
               <AnomalyFeed snapshot={snapshot} />
             </main>
 
-            {/* Right Sidebar: Anomaly Injection */}
             <AnomalyInjectionPanel toggles={toggles} onToggle={handleToggle} />
           </div>
         </React.Fragment>

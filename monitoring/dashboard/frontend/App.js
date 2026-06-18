@@ -28,6 +28,7 @@ const API_BASE = "http://localhost:8000";
 const WS_URL = "ws://localhost:8000/ws";
 const MAX_PATH_POINTS = 500;
 const MAX_CHART_POINTS = 200;
+const POSITION_JUMP_MAGNITUDE = 2.0;
 const ANOMALY_TYPES = [{
   key: "tracking_loss",
   label: "Tracking Loss",
@@ -241,7 +242,6 @@ function StatusBar({
   slamSeq,
   wsConnected
 }) {
-  // SLAM tracking status
   const slamOk = slam?.ok;
   let slamLabel, slamColor;
   if (slamOk === true) {
@@ -254,11 +254,7 @@ function StatusBar({
     slamLabel = "SLAM TRACKING: RELOC";
     slamColor = "#facc15";
   }
-
-  // Phase
   const phaseLabel = phase?.phase ? phase.phase.toUpperCase().replace(/_/g, " ") : "—";
-
-  // Motor status
   const totalPwm = motors?.total ?? 0;
   const innerPwm = motors?.inner ?? 0;
   const motorRunning = totalPwm > 0;
@@ -302,7 +298,6 @@ function PositionPathChart({
 }) {
   const [points, setPoints] = useState([]);
 
-  // Load history once
   useEffect(() => {
     if (historyData.length > 0) {
       const pts = historyData.filter(r => r.x != null && r.z != null).map(r => ({
@@ -313,7 +308,6 @@ function PositionPathChart({
     }
   }, [historyData]);
 
-  // Append live points
   useEffect(() => {
     if (liveSlam && liveSlam.ok && liveSlam.x != null && liveSlam.z != null) {
       setPoints(prev => {
@@ -939,6 +933,147 @@ function MotorStallPanel({
   }, /*#__PURE__*/React.createElement("span", null, "0.0"), /*#__PURE__*/React.createElement("span", null, "1.0"))));
 }
 
+// ── Position Jump Panel ──
+function PositionJumpPanel({
+  positionJumpActive
+}) {
+  const [probBar, setProbBar] = useState(50);
+  const [lastJump, setLastJump] = useState(null);
+  const [probability, setProbability] = useState(0.5);
+
+  // Poll /live/position_jump when anomaly is ON
+  useEffect(() => {
+    if (!positionJumpActive) {
+      setLastJump(null);
+      return;
+    }
+    let alive = true;
+    const poll = () => {
+      fetch(`${API_BASE}/live/position_jump`).then(r => r.json()).then(d => {
+        if (alive) {
+          setProbability(d.probability);
+          setLastJump(d.last_jump);
+          setProbBar(Math.round(d.probability * 100));
+        }
+      }).catch(() => {});
+    };
+    poll();
+    const id = setInterval(poll, 500);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [positionJumpActive]);
+
+  // Publish on first activation when toggle turns ON
+  const prevActiveRef = useRef(positionJumpActive);
+  useEffect(() => {
+    if (positionJumpActive && !prevActiveRef.current) {
+      fetch(`${API_BASE}/api/publish`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          topic: "car/mock/position_jump_params",
+          payload: {
+            probability: parseFloat(probability.toFixed(2))
+          }
+        })
+      }).catch(() => {});
+    }
+    prevActiveRef.current = positionJumpActive;
+  }, [positionJumpActive, probability]);
+  const handleProbChange = e => {
+    const val = parseInt(e.target.value, 10);
+    setProbBar(val);
+    const probVal = val / 100;
+    setProbability(probVal);
+    if (!positionJumpActive) return;
+    fetch(`${API_BASE}/api/publish`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        topic: "car/mock/position_jump_params",
+        payload: {
+          probability: parseFloat(probVal.toFixed(2))
+        }
+      })
+    }).catch(() => {});
+  };
+  const now = Date.now() / 1000;
+  const jumpRecent = lastJump && now - lastJump < 3;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "glass-panel p-4 rounded-xl flex flex-col gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 mb-1"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-label text-xs text-on-surface-variant flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "material-symbols-outlined text-sm"
+  }, "open_in_full"), "Position Jump"), lastJump && /*#__PURE__*/React.createElement("span", {
+    className: "px-2 py-0.5 rounded text-[10px] font-label tracking-wider ml-auto",
+    style: {
+      background: "rgba(125,211,252,0.15)",
+      border: "1px solid rgba(125,211,252,0.3)",
+      color: "#7dd3fc"
+    }
+  }, fmtTime(lastJump))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between p-3 rounded-lg",
+    style: {
+      background: `${jumpRecent ? "rgba(255,107,107,0.10)" : "rgba(74,222,128,0.10)"}`,
+      border: `1px solid ${jumpRecent ? "rgba(255,107,107,0.40)" : "rgba(74,222,128,0.40)"}`
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-body text-sm text-on-surface-variant"
+  }, "Status"), /*#__PURE__*/React.createElement("span", {
+    className: "font-display text-2xl",
+    style: {
+      color: jumpRecent ? "#ff6b6b" : "#4ade80"
+    }
+  }, jumpRecent ? "Jump Detected" : "Normal")), jumpRecent && /*#__PURE__*/React.createElement("div", {
+    className: "px-3 py-2 rounded text-sm font-body",
+    style: {
+      background: "rgba(255,107,107,0.12)",
+      border: "1px solid rgba(255,107,107,0.35)",
+      color: "#ff6b6b"
+    }
+  }, "✖ Position Jump — ", POSITION_JUMP_MAGNITUDE, "m displacement"), positionJumpActive && /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2 mt-1 pt-3",
+    style: {
+      borderTop: "1px solid rgba(255,255,255,0.08)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-label text-xs text-on-surface-variant flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "material-symbols-outlined text-sm",
+    style: {
+      color: "#7dd3fc"
+    }
+  }, "tune"), "Jump Probability — chance per spin"), /*#__PURE__*/React.createElement("span", {
+    className: "font-display text-sm",
+    style: {
+      color: "#7dd3fc"
+    }
+  }, probBar, "%")), /*#__PURE__*/React.createElement("input", {
+    type: "range",
+    min: "0",
+    max: "100",
+    value: probBar,
+    onChange: handleProbChange,
+    className: "w-full accent-cyan-400",
+    style: {
+      accentColor: "#7dd3fc"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between text-xs font-body text-on-surface-variant opacity-70"
+  }, /*#__PURE__*/React.createElement("span", null, "0%"), /*#__PURE__*/React.createElement("span", null, "100%"))));
+}
+
 // ── Phase Timeline ──
 function PhaseTimeline({
   historyData,
@@ -1039,7 +1174,6 @@ function AnomalyFeed({
   const [entries, setEntries] = useState([]);
   useEffect(() => {
     if (!snapshot) return;
-    // Find anomaly keys: car/anomaly/*
     const anomalyKeys = Object.keys(snapshot).filter(k => k.startsWith("car/anomaly/"));
     if (anomalyKeys.length === 0) return;
     const newEntries = [];
@@ -1378,17 +1512,22 @@ function App() {
     connected,
     snapshot
   } = useWebSocket();
-
-  // Extract live data from snapshot
   const liveSlam = snapshot["car/slam/pose"] || null;
   const liveImu = snapshot["car/imu"] || null;
   const liveMotors = snapshot["car/motors"] || null;
   const livePhase = snapshot["car/nav/phase"] || null;
 
-  // SLAM sequence
   const slamSeq = liveSlam?.seq ?? null;
 
-  // Load history on mount
+  // Position jump tracking from WebSocket
+  const [positionJumpLast, setPositionJumpLast] = useState(null);
+  useEffect(() => {
+    const anomaly = snapshot["car/anomaly/position_jump"];
+    if (anomaly && anomaly.ts) {
+      setPositionJumpLast(anomaly.ts);
+    }
+  }, [snapshot]);
+
   const [slamHistory] = useHistory("/history/slam?minutes=10");
   const [imuHistory] = useHistory("/history/imu?minutes=10");
   const [motorHistory] = useHistory("/history/motors?minutes=10");
@@ -1513,6 +1652,8 @@ function App() {
     slamLowFeatureActive: toggles.slam_low_feature
   }), /*#__PURE__*/React.createElement(MotorStallPanel, {
     motorStallActive: toggles.motor_stall
+  }), /*#__PURE__*/React.createElement(PositionJumpPanel, {
+    positionJumpActive: toggles.position_jump
   }))), /*#__PURE__*/React.createElement(AnomalyFeed, {
     snapshot: snapshot
   })), /*#__PURE__*/React.createElement(AnomalyInjectionPanel, {

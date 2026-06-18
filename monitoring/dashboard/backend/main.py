@@ -53,6 +53,8 @@ _motor_stall_severity: str = "ok"
 _motor_stall_freeze_streak: int = 0
 _motor_stall_arc_side: str | None = None
 _sim_speed: float = 1.0
+_position_jump_probability: float = 0.0
+_position_jump_last: float | None = None
 
 
 def _on_connect(client: mqtt.Client, userdata, flags, rc):
@@ -71,7 +73,7 @@ def _on_disconnect(client: mqtt.Client, userdata, rc):
 
 def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
     """Called in the paho network thread — must be non-blocking."""
-    global _motor_stall_severity, _motor_stall_freeze_streak, _motor_stall_arc_side, _sim_speed
+    global _motor_stall_severity, _motor_stall_freeze_streak, _motor_stall_arc_side, _sim_speed, _position_jump_probability, _position_jump_last
     topic = msg.topic
 
     if topic == "car/mock/inject":
@@ -103,6 +105,9 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
             _motor_stall_arc_side = "LEFT"
         else:
             _motor_stall_arc_side = None
+
+    elif topic == "car/anomaly/position_jump":
+        _position_jump_last = payload.get("ts", time.time())
 
     log.info("MQTT ← %s  %s", topic, json.dumps(payload))
 
@@ -370,6 +375,27 @@ async def set_sim_speed(payload: dict):
     if _mqtt_client is not None:
         _mqtt_client.publish("car/mock/sim_speed", json.dumps({"speed": speed}))
     return {"ok": True, "speed": speed}
+
+
+@app.get("/live/position_jump")
+async def live_position_jump():
+    return {
+        "probability": _position_jump_probability,
+        "last_jump": _position_jump_last,
+    }
+
+
+@app.post("/control/position_jump_params")
+async def set_position_jump_params(payload: dict):
+    global _position_jump_probability
+    prob = max(0.0, min(1.0, float(payload.get("probability", 0.0))))
+    _position_jump_probability = prob
+    if _mqtt_client is not None:
+        _mqtt_client.publish(
+            "car/mock/position_jump_params",
+            json.dumps({"probability": prob}),
+        )
+    return {"ok": True, "probability": prob}
 
 
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
