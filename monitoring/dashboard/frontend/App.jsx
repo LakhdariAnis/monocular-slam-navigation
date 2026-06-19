@@ -553,6 +553,105 @@ function computeElbow(fromName, toName) {
       );
     }
 
+    const MAX_FEED_ENTRIES = 50;
+
+    // ── Anomaly Feed ──
+    function AnomalyFeed() {
+      const [anomalies, setAnomalies] = useState([]);
+      const seenTs = useRef(new Set());
+
+      useEffect(() => {
+        let alive = true;
+        const poll = () => {
+          fetch(`${API_BASE}/anomalies`)
+            .then(r => r.json())
+            .then(data => {
+              if (!alive || !Array.isArray(data)) return;
+              setAnomalies(prev => {
+                const next = [...prev];
+                for (const entry of data) {
+                  const ts = entry.ts;
+                  if (ts != null && !seenTs.current.has(ts)) {
+                    seenTs.current.add(ts);
+                    next.unshift(entry);
+                  }
+                }
+                return next.slice(0, MAX_FEED_ENTRIES);
+              });
+            })
+            .catch(() => {});
+        };
+        poll();
+        const id = setInterval(poll, 3000);
+        return () => { alive = false; clearInterval(id); };
+      }, []);
+
+      const handleClear = () => {
+        fetch(`${API_BASE}/anomalies/clear`, { method: "POST" }).catch(() => {});
+        setAnomalies([]);
+        seenTs.current = new Set();
+      };
+
+      return (
+        <div id="anomaly-feed" className="glass-panel rounded-xl overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-outline-variant flex items-center gap-2"
+               style={{ background: "rgba(32, 44, 66, 0.3)" }}>
+            <h3 className="font-headline text-lg text-primary glow-text-primary">Anomaly Feed</h3>
+            <button onClick={handleClear}
+                    className="ml-auto font-label text-xs px-2 py-1 rounded transition-colors"
+                    style={{ background: "rgba(160, 180, 196, 0.1)", color: "#a0b4c4", border: "1px solid rgba(160, 180, 196, 0.2)" }}
+                    onMouseEnter={e => e.target.style.background = "rgba(160, 180, 196, 0.2)"}
+                    onMouseLeave={e => e.target.style.background = "rgba(160, 180, 196, 0.1)"}>
+              Clear Feed
+            </button>
+          </div>
+          <div className="overflow-y-auto max-h-[260px] p-3 space-y-2">
+            {anomalies.length === 0 && (
+              <div className="text-sm text-on-surface-variant text-center py-4">No anomalies detected</div>
+            )}
+            {anomalies.map((entry) => {
+              const isCleared = entry.severity === "CLEARED";
+              const severityColor = isCleared ? "#4ade80" : entry.severity === "WARN" ? "#facc15" : "#ff6b6b";
+              const isMotorStall = entry.type === "motor_stall";
+              return (
+                <div key={entry.ts} className="flex items-start gap-3 p-2.5 rounded-lg"
+                     style={{
+                       background: `${severityColor}10`,
+                       border: `1px solid ${severityColor}30`,
+                     }}>
+                  <div className="w-2 h-2 rounded-full mt-1 shrink-0"
+                       style={{ backgroundColor: severityColor, boxShadow: `0 0 6px ${severityColor}` }} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-label text-xs text-on-surface capitalize">{entry.type?.replace(/_/g, ' ')}</span>
+                      <span className="font-label text-[10px] px-1.5 py-0.5 rounded"
+                            style={{ background: `${severityColor}20`, color: severityColor }}>
+                        {entry.severity}
+                      </span>
+                      <span className="font-label text-[10px] text-on-surface-variant ml-auto whitespace-nowrap">{fmtTime(entry.ts)}</span>
+                    </div>
+                    {!isCleared && (
+                    <div className="font-label text-[11px] text-on-surface-variant mt-1">
+                      {isMotorStall ? (
+                        <>
+                          {entry.severity === "WARN" ? "arc drift" : "full freeze"}
+                          {" — "}x spread: {Number(entry.x_spread).toFixed(4)}
+                          {" / "}z spread: {Number(entry.z_spread).toFixed(4)}
+                        </>
+                      ) : (
+                        <>{entry.false_count}/{entry.total_count} false ({entry.false_ratio})</>
+                      )}
+                    </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
     // ── Phase Timeline ──
     function PhaseTimeline({ historyData, livePhase }) {
       const [segments, setSegments] = useState([]);
@@ -912,12 +1011,10 @@ function computeElbow(fromName, toName) {
         const wx = (x) => PAD + (x - X_MIN) * scale;
         const wz = (z) => H - PAD - (z - Z_MIN) * scale;
 
-        // Background
         ctx.clearRect(0, 0, W, H);
         ctx.fillStyle = "#0d1117";
         ctx.fillRect(0, 0, W, H);
 
-        // Grid
         ctx.strokeStyle = "rgba(255,255,255,0.06)";
         ctx.lineWidth = 1;
         ctx.setLineDash([]);
@@ -940,7 +1037,6 @@ function computeElbow(fromName, toName) {
           ctx.stroke();
         }
 
-        // Stations as rectangles
         const RW = 18, RH = 10;
         ctx.textAlign = "center";
         for (const [name, s] of Object.entries(STATIONS)) {
@@ -961,7 +1057,6 @@ function computeElbow(fromName, toName) {
         const imu   = snapshot["car/imu"];
         const phase = snapshot["car/nav/phase"];
 
-        // Car
         if (slam && slam.x != null && slam.z != null) {
           const cx = wx(slam.x), cz = wz(slam.z);
           const hdgRad = ((imu?.heading_deg ?? 0) * Math.PI / 180) - Math.PI / 2;
@@ -974,7 +1069,6 @@ function computeElbow(fromName, toName) {
           ctx.lineWidth = 1.5;
           ctx.stroke();
 
-          // Arrow
           const ax = cx + Math.cos(hdgRad) * ARROW_LEN;
           const az = cz + Math.sin(hdgRad) * ARROW_LEN;
           ctx.beginPath();
@@ -986,7 +1080,6 @@ function computeElbow(fromName, toName) {
           ctx.stroke();
           ctx.lineCap = "butt";
 
-          // Label
           ctx.fillStyle = "#8b949e";
           ctx.font = "500 10px system-ui";
           ctx.textAlign = "center";
@@ -1011,6 +1104,25 @@ function computeElbow(fromName, toName) {
             </div>
           </div>
           <div style={{ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'center' }}>
+            <button
+              onClick={() => fetch(`${API_BASE}/sim/reset`, { method: 'POST' }).catch(() => {})}
+              style={{
+                background: 'rgba(250,204,21,0.08)',
+                border: '1px solid rgba(250,204,21,0.2)',
+                borderRadius: '8px',
+                color: '#facc15',
+                padding: '6px 16px',
+                fontSize: '13px',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                letterSpacing: '0.03em',
+                transition: 'background 0.15s',
+              }}
+              onMouseEnter={e => e.target.style.background = 'rgba(250,204,21,0.15)'}
+              onMouseLeave={e => e.target.style.background = 'rgba(250,204,21,0.08)'}
+            >
+              Reset to Start
+            </button>
             {Object.keys(STATIONS).map(name => (
               <button
                 key={name}
@@ -1075,7 +1187,6 @@ function computeElbow(fromName, toName) {
         return () => { alive = false; clearInterval(id); };
       }, []);
 
-      // Anomaly toggle state
       const [toggles, setToggles] = useState(
         Object.fromEntries(ANOMALY_TYPES.map(a => [a.key, false]))
       );
@@ -1163,6 +1274,8 @@ function computeElbow(fromName, toName) {
                   <SlamRatePanel />
                 </div>
               </div>
+
+              <AnomalyFeed />
             </main>
 
             <AnomalyInjectionPanel

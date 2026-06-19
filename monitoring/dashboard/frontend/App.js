@@ -27,7 +27,7 @@ const API_BASE = "http://localhost:8000";
 const WS_URL = "ws://localhost:8000/ws";
 const MAX_PATH_POINTS = 500;
 const MAX_CHART_POINTS = 200;
-const POSITION_JUMP_MAGNITUDE = 2.0; // eyeballed from sim replay logs, not from any spec
+const POSITION_JUMP_MAGNITUDE = 2.0;
 const ANOMALY_TYPES = [{
   key: "tracking_loss",
   label: "Tracking Loss",
@@ -108,7 +108,6 @@ const STATIONS = {
 };
 const ROUTE = [["start", "station_1"], ["station_1", "station_2"], ["station_2", "start"]];
 function computeElbow(fromName, toName) {
-  // mirrors the Python _compute_elbow — kept in sync manually
   const src = STATIONS[fromName];
   const dst = STATIONS[toName];
   const [cx, cz] = fromName === "start" ? [src.x, src.z] : src.standoff;
@@ -139,7 +138,6 @@ function fmtTime(ts) {
     hour12: false
   });
 }
-// nothing special here — just ISO timestamps are ugly on a dashboard
 function fmtDuration(seconds) {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   const m = Math.floor(seconds / 60);
@@ -312,6 +310,7 @@ function PositionPathChart({
   }, [liveSlam]);
   const currentPos = points.length > 0 ? points[points.length - 1] : null;
 
+  // Custom dot to show trail
   const renderDot = props => {
     const {
       cx,
@@ -686,6 +685,104 @@ function SlamRatePanel() {
     }
   }, "✖ SLAM rate critical — car may stop"));
 }
+const MAX_FEED_ENTRIES = 50;
+
+// ── Anomaly Feed ──
+function AnomalyFeed() {
+  const [anomalies, setAnomalies] = useState([]);
+  const seenTs = useRef(new Set());
+  useEffect(() => {
+    let alive = true;
+    const poll = () => {
+      fetch(`${API_BASE}/anomalies`).then(r => r.json()).then(data => {
+        if (!alive || !Array.isArray(data)) return;
+        setAnomalies(prev => {
+          const next = [...prev];
+          for (const entry of data) {
+            const ts = entry.ts;
+            if (ts != null && !seenTs.current.has(ts)) {
+              seenTs.current.add(ts);
+              next.unshift(entry);
+            }
+          }
+          return next.slice(0, MAX_FEED_ENTRIES);
+        });
+      }).catch(() => {});
+    };
+    poll();
+    const id = setInterval(poll, 3000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+  const handleClear = () => {
+    fetch(`${API_BASE}/anomalies/clear`, {
+      method: "POST"
+    }).catch(() => {});
+    setAnomalies([]);
+    seenTs.current = new Set();
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    id: "anomaly-feed",
+    className: "glass-panel rounded-xl overflow-hidden flex flex-col"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-4 border-b border-outline-variant flex items-center gap-2",
+    style: {
+      background: "rgba(32, 44, 66, 0.3)"
+    }
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-headline text-lg text-primary glow-text-primary"
+  }, "Anomaly Feed"), /*#__PURE__*/React.createElement("button", {
+    onClick: handleClear,
+    className: "ml-auto font-label text-xs px-2 py-1 rounded transition-colors",
+    style: {
+      background: "rgba(160, 180, 196, 0.1)",
+      color: "#a0b4c4",
+      border: "1px solid rgba(160, 180, 196, 0.2)"
+    },
+    onMouseEnter: e => e.target.style.background = "rgba(160, 180, 196, 0.2)",
+    onMouseLeave: e => e.target.style.background = "rgba(160, 180, 196, 0.1)"
+  }, "Clear Feed")), /*#__PURE__*/React.createElement("div", {
+    className: "overflow-y-auto max-h-[260px] p-3 space-y-2"
+  }, anomalies.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "text-sm text-on-surface-variant text-center py-4"
+  }, "No anomalies detected"), anomalies.map(entry => {
+    const isCleared = entry.severity === "CLEARED";
+    const severityColor = isCleared ? "#4ade80" : entry.severity === "WARN" ? "#facc15" : "#ff6b6b";
+    const isMotorStall = entry.type === "motor_stall";
+    return /*#__PURE__*/React.createElement("div", {
+      key: entry.ts,
+      className: "flex items-start gap-3 p-2.5 rounded-lg",
+      style: {
+        background: `${severityColor}10`,
+        border: `1px solid ${severityColor}30`
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "w-2 h-2 rounded-full mt-1 shrink-0",
+      style: {
+        backgroundColor: severityColor,
+        boxShadow: `0 0 6px ${severityColor}`
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "flex-1 min-w-0"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 flex-wrap"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "font-label text-xs text-on-surface capitalize"
+    }, entry.type?.replace(/_/g, ' ')), /*#__PURE__*/React.createElement("span", {
+      className: "font-label text-[10px] px-1.5 py-0.5 rounded",
+      style: {
+        background: `${severityColor}20`,
+        color: severityColor
+      }
+    }, entry.severity), /*#__PURE__*/React.createElement("span", {
+      className: "font-label text-[10px] text-on-surface-variant ml-auto whitespace-nowrap"
+    }, fmtTime(entry.ts))), !isCleared && /*#__PURE__*/React.createElement("div", {
+      className: "font-label text-[11px] text-on-surface-variant mt-1"
+    }, isMotorStall ? /*#__PURE__*/React.createElement(React.Fragment, null, entry.severity === "WARN" ? "arc drift" : "full freeze", " — ", "x spread: ", Number(entry.x_spread).toFixed(4), " / ", "z spread: ", Number(entry.z_spread).toFixed(4)) : /*#__PURE__*/React.createElement(React.Fragment, null, entry.false_count, "/", entry.total_count, " false (", entry.false_ratio, ")"))));
+  })));
+}
 
 // ── Phase Timeline ──
 function PhaseTimeline({
@@ -713,6 +810,7 @@ function PhaseTimeline({
     if (livePhase && livePhase.phase) {
       setSegments(prev => {
         const now = typeof livePhase.ts === "number" ? livePhase.ts : Date.now() / 1000;
+        // Close last segment
         const updated = prev.map((s, i) => {
           if (i === prev.length - 1 && s.duration === 0) {
             return {
@@ -833,6 +931,7 @@ function AnomalyInjectionPanel({
     }).catch(() => {});
   };
 
+  // Publish motor_stall severity on first activation
   const prevMotorRef = useRef(toggles.motor_stall);
   useEffect(() => {
     if (toggles.motor_stall && !prevMotorRef.current) {
@@ -872,6 +971,7 @@ function AnomalyInjectionPanel({
     }).catch(() => {});
   };
 
+  // Publish slam params on first activation
   const prevSlamRef = useRef(toggles.slam_low_feature);
   useEffect(() => {
     if (toggles.slam_low_feature && !prevSlamRef.current) {
@@ -1054,12 +1154,10 @@ function MapCanvas({
     const wx = x => PAD + (x - X_MIN) * scale;
     const wz = z => H - PAD - (z - Z_MIN) * scale;
 
-    // Background
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = "#0d1117";
     ctx.fillRect(0, 0, W, H);
 
-    // Grid
     ctx.strokeStyle = "rgba(255,255,255,0.06)";
     ctx.lineWidth = 1;
     ctx.setLineDash([]);
@@ -1082,7 +1180,6 @@ function MapCanvas({
       ctx.stroke();
     }
 
-    // Stations as rectangles
     const RW = 18,
       RH = 10;
     ctx.textAlign = "center";
@@ -1104,7 +1201,6 @@ function MapCanvas({
     const imu = snapshot["car/imu"];
     const phase = snapshot["car/nav/phase"];
 
-    // Car
     if (slam && slam.x != null && slam.z != null) {
       const cx = wx(slam.x),
         cz = wz(slam.z);
@@ -1117,7 +1213,6 @@ function MapCanvas({
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
-      // Arrow
       const ax = cx + Math.cos(hdgRad) * ARROW_LEN;
       const az = cz + Math.sin(hdgRad) * ARROW_LEN;
       ctx.beginPath();
@@ -1129,7 +1224,6 @@ function MapCanvas({
       ctx.stroke();
       ctx.lineCap = "butt";
 
-      // Label
       ctx.fillStyle = "#8b949e";
       ctx.font = "500 10px system-ui";
       ctx.textAlign = "center";
@@ -1173,7 +1267,25 @@ function MapCanvas({
       marginTop: '12px',
       justifyContent: 'center'
     }
-  }, Object.keys(STATIONS).map(name => /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => fetch(`${API_BASE}/sim/reset`, {
+      method: 'POST'
+    }).catch(() => {}),
+    style: {
+      background: 'rgba(250,204,21,0.08)',
+      border: '1px solid rgba(250,204,21,0.2)',
+      borderRadius: '8px',
+      color: '#facc15',
+      padding: '6px 16px',
+      fontSize: '13px',
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      letterSpacing: '0.03em',
+      transition: 'background 0.15s'
+    },
+    onMouseEnter: e => e.target.style.background = 'rgba(250,204,21,0.15)',
+    onMouseLeave: e => e.target.style.background = 'rgba(250,204,21,0.08)'
+  }, "Reset to Start"), Object.keys(STATIONS).map(name => /*#__PURE__*/React.createElement("button", {
     key: name,
     onClick: () => fetch('/api/goto', {
       method: 'POST',
@@ -1236,7 +1348,6 @@ function App() {
     };
   }, []);
 
-  // Anomaly toggle state
   const [toggles, setToggles] = useState(Object.fromEntries(ANOMALY_TYPES.map(a => [a.key, false])));
   const handleToggle = useCallback(async key => {
     const newVal = !toggles[key];
@@ -1342,7 +1453,7 @@ function App() {
   }), /*#__PURE__*/React.createElement(MotorPWMChart, {
     historyData: motorHistory,
     liveMotors: liveMotors
-  }), /*#__PURE__*/React.createElement(SlamRatePanel, null)))), /*#__PURE__*/React.createElement(AnomalyInjectionPanel, {
+  }), /*#__PURE__*/React.createElement(SlamRatePanel, null))), /*#__PURE__*/React.createElement(AnomalyFeed, null)), /*#__PURE__*/React.createElement(AnomalyInjectionPanel, {
     toggles: toggles,
     onToggle: handleToggle,
     onImuDriftReset: handleImuDriftReset

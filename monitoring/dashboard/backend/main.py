@@ -40,6 +40,7 @@ ws_clients: set[WebSocket] = set()
 ws_clients_lock = asyncio.Lock()
 
 slam_timestamps: collections.deque = collections.deque(maxlen=60)
+anomaly_feed: collections.deque = collections.deque(maxlen=50)
 
 # same ZMQ pattern as the SLAM project
 _mqtt_queue: asyncio.Queue | None = None
@@ -150,6 +151,7 @@ async def _mqtt_consumer():
 
         if topic == "car/slam/pose":
             slam_timestamps.append(time.time())
+
         snapshot = json.dumps(latest)
         async with ws_clients_lock:
             stale: list[WebSocket] = []
@@ -160,6 +162,23 @@ async def _mqtt_consumer():
                     stale.append(ws)
             for ws in stale:
                 ws_clients.discard(ws)
+
+        if topic in ("car/anomaly/tracking_loss", "car/anomaly/motor_stall"):
+            if topic == "car/anomaly/motor_stall" and "motor_active_ratio" not in payload:
+                continue
+            keys = payload.keys()
+            entry = {k: payload.get(k) for k in keys}
+            anomaly_feed.append(entry)
+            msg = json.dumps({"_anomaly": True, "entry": entry})
+            async with ws_clients_lock:
+                stale = []
+                for ws in ws_clients:
+                    try:
+                        await ws.send_text(msg)
+                    except Exception:
+                        stale.append(ws)
+                for ws in stale:
+                    ws_clients.discard(ws)
 
 
 _influx_client: InfluxDBClient | None = None
@@ -339,6 +358,23 @@ async def goto(request: Request):
         return {"status": "error", "reason": "missing target"}
     _mqtt_client.publish("car/mock/goto", json.dumps({"target": target}))
     return {"status": "sent", "target": target}
+
+
+@app.post("/sim/reset")
+async def sim_reset():
+    _mqtt_client.publish("car/mock/reset", json.dumps({"station": "start"}))
+    return {"status": "reset sent"}
+
+
+@app.get("/anomalies")
+async def get_anomalies():
+    return list(anomaly_feed)
+
+
+@app.post("/anomalies/clear")
+async def clear_anomalies():
+    anomaly_feed.clear()
+    return {"status": "cleared"}
 
 
 @app.get("/live/slam_rate")
