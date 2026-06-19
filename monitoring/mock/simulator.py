@@ -18,10 +18,7 @@ IMU_DT = 1.0 / IMU_HZ
 FORWARD_SPEED = 45
 SLOW_SPEED = 40
 SPIN_SPEED = 40
-SEARCH_SPIN = 35
-SPIN_START = 45
-SPIN_MIN = 35
-SPIN_DECAY = 1  # per iteration (not used directly in speed calc, kept for reference)
+
 WAYPOINT_THRESHOLD = 0.05  # elbow arrival (m)
 STATION_THRESHOLD = 0.04  # standoff arrival (m)
 SPIN_TOLERANCE = 5  # degrees
@@ -32,7 +29,6 @@ FWD_SLOW_RATE = 0.00095  # SLOW_SPEED=40
 REVERSE_RATE = 0.00110  # same as forward (FORWARD_SPEED used for depart)
 
 SPIN_RATE_DEG = 0.36  # ~0.36°/tick at 50 Hz → 90° ≈ 5 s
-SEARCH_SPIN_RATE = 0.32  # SEARCH_SPIN=35
 
 
 IMU_DRIFT_INITIAL_RATE = 0.002  # bias rate at drift activation (deg/s)
@@ -71,6 +67,7 @@ STATIONS = {
         "standoff": (-0.0303, 1.2225),
     },
 }
+# coordinates from the physical grid tape marks — not math, just where we put them
 
 ROUTE = [
     ("start", "station_1"),
@@ -90,8 +87,7 @@ DEPART_HEADING = {
     "start": 0.0,
 }
 
-ALIGN_TARGET_AREA = 15000
-ALIGN_INITIAL_AREA = 1000
+
 
 
 _lock = threading.Lock()
@@ -111,9 +107,14 @@ _motor_stall_arc_side = None
 _sim_speed = 1.0  # multiplier: 0.25 = slow, 1.0 = normal, 3.0 = fast
 _position_jump_probability = 0.0
 _position_jump_fired = False
+_skip_next_depart = True
 _imu_drift_current_rate = IMU_DRIFT_INITIAL_RATE
 _imu_drift_reset_time = None
 _prev_intent = None
+class ResetInterrupt(Exception):
+    pass
+
+_force_reset_flag = False
 
 
 def _sleep(seconds):
@@ -159,6 +160,27 @@ def set_goto(target: str):
     _goto_target = target
     _goto_event.set()
     print(f"[GOTO] → {target}")
+
+
+def force_reset(station_name: str):
+    """Teleport car to station — used by test harness to guarantee clean state."""
+    global _docked_at, _skip_next_depart, _force_reset_flag
+    _force_reset_flag = True
+    if station_name not in STATIONS:
+        print(f"[RESET] unknown station: {station_name}")
+        return
+    with state.lock:
+        state.x = STATIONS[station_name]["x"]
+        state.z = STATIONS[station_name]["z"]
+        state.heading_deg = ARRIVED_HEADING.get(station_name, 0.0)
+        state.imu_heading_deg = state.heading_deg
+        state.motion_intent = "stopped"
+    _docked_at = station_name
+    _skip_next_depart = True   # next leg behaves like a true fresh start
+    _pub_stop()
+    _set_phase("arrived", target_station=station_name)
+    _goto_event.set()
+    print(f"[SIM] ⟳ force reset to {station_name}")
 
 
 def _dist(x1, z1, x2, z2):
@@ -208,6 +230,7 @@ def on_connect(c, userdata, flags, rc):
     if rc == 0:
         c.subscribe("car/mock/inject")
         c.subscribe("car/mock/goto")
+        c.subscribe("car/mock/reset")
         c.subscribe("car/mock/slam_params")
         c.subscribe("car/mock/motor_stall_params")
         c.subscribe("car/mock/sim_speed")
@@ -230,6 +253,9 @@ def on_message(c, userdata, msg):
             set_goto(target)
         else:
             print(f"[GOTO] unknown station: {target}")
+    elif msg.topic == "car/mock/reset":
+        station = payload.get("station", "start")
+        force_reset(station)
     elif msg.topic == "car/mock/inject":
         anomaly = payload.get("anomaly", "")
         active = bool(payload.get("active", False))
@@ -302,7 +328,7 @@ class State:
         self.forward_dir_z = 0.0
         self.forward_speed = FORWARD_SPEED
 
-        self.align_area = 0
+
 
         self.lock = threading.Lock()
 
@@ -425,7 +451,7 @@ def slam_loop():
     global _current_slam_rate, _motor_stall_freeze_streak, _motor_stall_force_immobile
     seq = 0
     _slam_stopped_at = None
-
+    # had to add the rate lock after race conditions in testing
     while True:
         t0 = time.monotonic()
         now = time.time()
@@ -597,7 +623,7 @@ def imu_loop():
 
 
 def _sim_spin(target_bearing_deg, spin_speed=SPIN_SPEED):
-
+    # position_jump felt too predictable so I made it random magnitude/direction
     global _position_jump_fired
 
     with state.lock:
@@ -620,6 +646,8 @@ def _sim_spin(target_bearing_deg, spin_speed=SPIN_SPEED):
     lost_tracking = False
     while True:
         _sleep(poll_interval)
+        if _force_reset_flag:
+            raise ResetInterrupt()
         if get_anomaly("tracking_loss"):
             lost_tracking = True
             break
@@ -665,6 +693,7 @@ def _sim_spin(target_bearing_deg, spin_speed=SPIN_SPEED):
 def _sim_drive(
     target_x, target_z, threshold, heading_bearing_deg, reverse=False, mid_switch=True
 ):
+    global _position_jump_fired
     rad = math.radians(heading_bearing_deg)
     dir_x = math.sin(rad)
     dir_z = math.cos(rad)
@@ -702,6 +731,8 @@ def _sim_drive(
 
     while True:
         _sleep(poll_interval)
+        if _force_reset_flag:
+            raise ResetInterrupt()
 
         if get_anomaly("tracking_loss"):
             lost_tracking = True
@@ -710,11 +741,9 @@ def _sim_drive(
         if get_anomaly("slam_low_feature"):
             current_rate = get_slam_rate()
             if current_rate < SLAM_RATE_THRESHOLD:
-                # rate too low — stop and wait for recovery
                 _pub_stop()
                 with state.lock:
                     state.motion_intent = "stopped"
-                # wait until rate recovers above threshold
                 while (
                     get_anomaly("slam_low_feature")
                     and get_slam_rate() < SLAM_RATE_RESUME
@@ -773,6 +802,7 @@ def _sim_drive(
                 cz - _pj_start_z
             ) * original_fdz
             if _pj_current >= _pj_total:
+                _position_jump_fired = False   # consumed; don't affect later legs
                 break
 
     with state.lock:
@@ -813,6 +843,8 @@ def _sim_depart_forward(from_station_name):
     lost_tracking = False
     while True:
         _sleep(0.05)
+        if _force_reset_flag:
+            raise ResetInterrupt()
         if get_anomaly("tracking_loss"):
             lost_tracking = True
             break
@@ -831,117 +863,11 @@ def _sim_depart_forward(from_station_name):
         _set_phase("tracking_lost")
 
 
-def _sim_search_for_object():
-    target_offset = random.uniform(20, 90)
-    with state.lock:
-        current_hdg = state.heading_deg
-    target_hdg = (current_hdg + target_offset) % 360
 
-    with state.lock:
-        state.motion_intent = "spin"
-        state.forward_dir_x = +1.0  # CCW / left
-        state.forward_dir_z = 0.0
-    _pub_spin(left=True, speed=SEARCH_SPIN)
-
-    poll = 0.02
-    if get_anomaly("phase_timeout"):
-        poll *= PHASE_TIMEOUT_MULTIPLIER
-
-    while True:
-        _sleep(poll)
-        with state.lock:
-            hdg = state.heading_deg
-        diff = _angle_diff(target_hdg, hdg)
-        if abs(diff) <= SPIN_TOLERANCE:
-            break
-
-    with state.lock:
-        state.motion_intent = "stopped"
-        state.align_area = ALIGN_INITIAL_AREA
-    _pub_stop()
-    time.sleep(0.2)
-
-
-def _sim_align_to_object():
-    target_offset = random.uniform(5, 25)
-    with state.lock:
-        current_hdg = state.heading_deg
-    target_hdg = (current_hdg + target_offset) % 360
-
-    iteration = 0
-    poll = 0.02
-    if get_anomaly("phase_timeout"):
-        poll *= PHASE_TIMEOUT_MULTIPLIER
-
-    with state.lock:
-        state.motion_intent = "spin"
-        state.forward_dir_x = +1.0
-        state.forward_dir_z = 0.0
-
-    while True:
-        spin_speed = max(SPIN_MIN, SPIN_START - iteration * SPIN_DECAY)
-        _pub_spin(left=True, speed=spin_speed)
-        time.sleep(poll)
-        iteration += 1
-        with state.lock:
-            hdg = state.heading_deg
-        diff = _angle_diff(target_hdg, hdg)
-        if abs(diff) <= SPIN_TOLERANCE:
-            break
-
-    with state.lock:
-        state.motion_intent = "stopped"
-    _pub_stop()
-    time.sleep(0.2)
-
-
-def _sim_approach_object():
-    MAX_FWD_SPEED = 50
-    MIN_FWD_SPEED = 35
-
-    with state.lock:
-        hdg = state.heading_deg
-    rad = math.radians(hdg)
-    dir_x = math.sin(rad)
-    dir_z = math.cos(rad)
-
-    with state.lock:
-        state.motion_intent = "forward"
-        state.forward_dir_x = dir_x
-        state.forward_dir_z = dir_z
-        state.forward_speed = MAX_FWD_SPEED
-        area = state.align_area
-
-    poll = 0.08
-    if get_anomaly("phase_timeout"):
-        poll *= PHASE_TIMEOUT_MULTIPLIER
-
-    while True:
-        with state.lock:
-            area = state.align_area
-
-        if area >= ALIGN_TARGET_AREA:
-            break
-
-        progress = min(area / ALIGN_TARGET_AREA, 1.0)
-        speed = int(MAX_FWD_SPEED - progress * (MAX_FWD_SPEED - MIN_FWD_SPEED))
-        _pub_forward(speed)
-
-        time.sleep(poll)
-        growth = random.randint(300, 700) * (speed / MAX_FWD_SPEED)
-        with state.lock:
-            state.align_area = min(
-                int(state.align_area + growth), ALIGN_TARGET_AREA + 1000
-            )
-
-    with state.lock:
-        state.motion_intent = "stopped"
-    _pub_stop()
-    time.sleep(0.2)
 
 
 def phase_loop():
-    global _docked_at
+    global _docked_at, _skip_next_depart, _force_reset_flag
 
     with state.lock:
         state.x = STATIONS["start"]["x"]
@@ -951,59 +877,38 @@ def phase_loop():
         state.motion_intent = "stopped"
 
     _docked_at = "start"
+    _skip_next_depart = True   # skip depart maneuver on the very first leg
     _set_phase("arrived", target_station=_docked_at)
     _pub_stop()
 
     leg_index = 0
-    first_leg = True
 
     while True:
-        _goto_event.wait()
-        _goto_event.clear()
+        try:
+            _goto_event.wait()
+            _goto_event.clear()
 
-        with _lock:
-            to_name = _goto_target
-
-        from_name = _docked_at
-
-        print(f"\n[SIM] ═══ Leg: {from_name} → {to_name} ═══")
-
-        elbow_x, elbow_z, standoff_x, standoff_z = _compute_elbow(from_name, to_name)
-
-        with state.lock:
-            cx, cz = state.x, state.z
-
-        if elbow_x is not None:
-            bear_to_elbow = _bearing(cx, cz, elbow_x, elbow_z)
-        else:
-            bear_to_elbow = None
-
-        bear_to_standoff = _bearing(
-            elbow_x if elbow_x is not None else cx,
-            elbow_z if elbow_z is not None else cz,
-            standoff_x,
-            standoff_z,
-        )
-
-        if not first_leg:
-            _set_phase("departing", target_station=to_name)
-            _sim_depart_forward(from_name)
-            if get_anomaly("tracking_loss"):
-                _set_phase("tracking_lost")
-                _pub_stop()
-                _goto_event.wait()
-                _goto_event.clear()
+            if _force_reset_flag:
+                _force_reset_flag = False
                 continue
+
+            with _lock:
+                to_name = _goto_target
+
+            from_name = _docked_at
+
+            print(f"\n[SIM] ═══ Leg: {from_name} → {to_name} ═══")
+
+            elbow_x, elbow_z, standoff_x, standoff_z = _compute_elbow(from_name, to_name)
 
             with state.lock:
                 cx, cz = state.x, state.z
-            elbow_x, elbow_z, standoff_x, standoff_z = _compute_elbow(
-                from_name, to_name
-            )
+
             if elbow_x is not None:
                 bear_to_elbow = _bearing(cx, cz, elbow_x, elbow_z)
             else:
                 bear_to_elbow = None
+
             bear_to_standoff = _bearing(
                 elbow_x if elbow_x is not None else cx,
                 elbow_z if elbow_z is not None else cz,
@@ -1011,23 +916,90 @@ def phase_loop():
                 standoff_z,
             )
 
-        first_leg = False
+            if not _skip_next_depart:
+                _set_phase("departing", target_station=to_name)
+                _sim_depart_forward(from_name)
+                if get_anomaly("tracking_loss"):
+                    _set_phase("tracking_lost")
+                    _pub_stop()
+                    _goto_event.wait()
+                    continue
 
-        _set_phase("phase1", target_station=to_name)
+                with state.lock:
+                    cx, cz = state.x, state.z
+                elbow_x, elbow_z, standoff_x, standoff_z = _compute_elbow(
+                    from_name, to_name
+                )
+                if elbow_x is not None:
+                    bear_to_elbow = _bearing(cx, cz, elbow_x, elbow_z)
+                else:
+                    bear_to_elbow = None
+                bear_to_standoff = _bearing(
+                    elbow_x if elbow_x is not None else cx,
+                    elbow_z if elbow_z is not None else cz,
+                    standoff_x,
+                    standoff_z,
+                )
 
-        if elbow_x is not None:
-            _sim_spin(bear_to_elbow, spin_speed=SPIN_SPEED)
-            if get_anomaly("tracking_loss"):
-                _set_phase("tracking_lost")
-                _pub_stop()
-                _goto_event.wait()
-                _goto_event.clear()
-                continue
+            _skip_next_depart = False
+
+            _set_phase("phase1", target_station=to_name)
+
+            if elbow_x is not None:
+                _sim_spin(bear_to_elbow, spin_speed=SPIN_SPEED)
+                if get_anomaly("tracking_loss"):
+                    _set_phase("tracking_lost")
+                    _pub_stop()
+                    _goto_event.wait()
+                    continue
+                _sim_drive(
+                    elbow_x,
+                    elbow_z,
+                    WAYPOINT_THRESHOLD,
+                    bear_to_elbow,
+                    reverse=False,
+                    mid_switch=True,
+                )
+                if get_anomaly("tracking_loss"):
+                    _set_phase("tracking_lost")
+                    _pub_stop()
+                    _goto_event.wait()
+                    continue
+                _sleep(0.5)
+                _set_phase("phase2", target_station=to_name)
+                with state.lock:
+                    cx, cz = state.x, state.z
+                bear_to_standoff = _bearing(cx, cz, standoff_x, standoff_z)
+                _sim_spin(bear_to_standoff, spin_speed=SPIN_SPEED)
+                if get_anomaly("tracking_loss"):
+                    _set_phase("tracking_lost")
+                    _pub_stop()
+                    _goto_event.wait()
+                    continue
+            else:
+                # straight line — spin directly to standoff bearing, skip phase2
+                with state.lock:
+                    cx, cz = state.x, state.z
+                bear_to_standoff = _bearing(cx, cz, standoff_x, standoff_z)
+                _sim_spin(bear_to_standoff, spin_speed=SPIN_SPEED)
+                if get_anomaly("tracking_loss"):
+                    _set_phase("tracking_lost")
+                    _pub_stop()
+                    _goto_event.wait()
+                    continue
+                _set_phase("phase2", target_station=to_name)
+
+            _sleep(0.5)
+
+            _set_phase("phase3", target_station=to_name)
+            with state.lock:
+                cx, cz = state.x, state.z
+            bear_to_standoff = _bearing(cx, cz, standoff_x, standoff_z)
             _sim_drive(
-                elbow_x,
-                elbow_z,
-                WAYPOINT_THRESHOLD,
-                bear_to_elbow,
+                standoff_x,
+                standoff_z,
+                STATION_THRESHOLD,
+                bear_to_standoff,
                 reverse=False,
                 mid_switch=True,
             )
@@ -1035,70 +1007,26 @@ def phase_loop():
                 _set_phase("tracking_lost")
                 _pub_stop()
                 _goto_event.wait()
-                _goto_event.clear()
                 continue
-            _sleep(0.5)
-            _set_phase("phase2", target_station=to_name)
-            with state.lock:
-                cx, cz = state.x, state.z
-            bear_to_standoff = _bearing(cx, cz, standoff_x, standoff_z)
-            _sim_spin(bear_to_standoff, spin_speed=SPIN_SPEED)
-            if get_anomaly("tracking_loss"):
-                _set_phase("tracking_lost")
-                _pub_stop()
-                _goto_event.wait()
-                _goto_event.clear()
-                continue
-        else:
-            # straight line — spin directly to standoff bearing, skip phase2
-            with state.lock:
-                cx, cz = state.x, state.z
-            bear_to_standoff = _bearing(cx, cz, standoff_x, standoff_z)
-            _sim_spin(bear_to_standoff, spin_speed=SPIN_SPEED)
-            if get_anomaly("tracking_loss"):
-                _set_phase("tracking_lost")
-                _pub_stop()
-                _goto_event.wait()
-                _goto_event.clear()
-                continue
-            _set_phase("phase2", target_station=to_name)
 
-        _sleep(0.5)
-
-        _set_phase("phase3", target_station=to_name)
-        with state.lock:
-            cx, cz = state.x, state.z
-        bear_to_standoff = _bearing(cx, cz, standoff_x, standoff_z)
-        _sim_drive(
-            standoff_x,
-            standoff_z,
-            STATION_THRESHOLD,
-            bear_to_standoff,
-            reverse=False,
-            mid_switch=True,
-        )
-        if get_anomaly("tracking_loss"):
-            _set_phase("tracking_lost")
+            _set_phase("aligning", target_station=to_name)
+            _set_phase("arrived", target_station=to_name)
             _pub_stop()
-            _goto_event.wait()
-            _goto_event.clear()
+
+            with state.lock:
+                state.heading_deg = ARRIVED_HEADING.get(to_name, 0.0)
+                state.imu_heading_deg = state.heading_deg
+                state.motion_intent = "stopped"
+
+
+            _docked_at = to_name
+            print(f"[SIM] ✓ arrived at {to_name}")
+
+            print("[GOTO] waiting for command...")
+        except ResetInterrupt:
+
+            _pub_stop()
             continue
-
-        _set_phase("aligning", target_station=to_name)
-        _set_phase("arrived", target_station=to_name)
-        _pub_stop()
-
-        with state.lock:
-            state.heading_deg = ARRIVED_HEADING.get(to_name, 0.0)
-            state.imu_heading_deg = state.heading_deg
-            state.motion_intent = "stopped"
-            state.align_area = 0
-
-        _docked_at = to_name
-        print(f"[SIM] ✓ arrived at {to_name}")
-
-        print("[GOTO] waiting for command...")
-
 
 def _status_printer():
     while True:

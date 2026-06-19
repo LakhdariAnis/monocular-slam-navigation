@@ -5,7 +5,7 @@ import paho.mqtt.client as mqtt
 
 BROKER_HOST = "localhost"
 BROKER_PORT = 1883
-TOPIC       = "car/mock/inject"
+TOPIC       = "car/mock/inject"  # same topic the simulator subscribes to
 
 VALID = [
     "tracking_loss",
@@ -23,6 +23,7 @@ def usage():
 
 
 def main():
+    # felt cleaner than argparse for a throwaway tool
     if len(sys.argv) < 2:
         usage()
 
@@ -57,7 +58,7 @@ def main():
     c.loop_stop()
 
     print(f"[INJECT] {anomaly} → {'ON' if active else 'OFF'}")
-    print(f"[INJECT] published to {TOPIC}: {payload}")
+    print(f"[INJECT] {TOPIC} <- {payload}")
 
 
 if __name__ == "__main__":

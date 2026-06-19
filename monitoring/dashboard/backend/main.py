@@ -41,12 +41,10 @@ ws_clients_lock = asyncio.Lock()
 
 slam_timestamps: collections.deque = collections.deque(maxlen=60)
 
-# asyncio.Queue bridging the paho-mqtt thread → async consumer
-# Created lazily inside the running event loop (see lifespan)
+# same ZMQ pattern as the SLAM project
 _mqtt_queue: asyncio.Queue | None = None
 _loop: asyncio.AbstractEventLoop | None = None
 
-# Reference to the paho MQTT client (for publishing inject commands)
 _mqtt_client: mqtt.Client | None = None
 
 _motor_stall_severity: str = "ok"
@@ -117,7 +115,6 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
 
     log.info("MQTT ← %s  %s", topic, json.dumps(payload))
 
-    # Thread-safe enqueue into the asyncio world
     if _mqtt_queue is not None and _loop is not None:
         _loop.call_soon_threadsafe(_mqtt_queue.put_nowait, (topic, payload))
 
@@ -198,6 +195,7 @@ from(bucket: "{INFLUX_BUCKET}")
 async def lifespan(app: FastAPI):
     global _mqtt_queue, _loop, _influx_client
 
+    # took a while to get the shutdown ordering right here
     _loop = asyncio.get_running_loop()
     _mqtt_queue = asyncio.Queue()
 
@@ -225,7 +223,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow all origins (frontend served on a different port)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -349,7 +346,7 @@ async def live_slam_rate():
     now = time.time()
     cutoff = now - 2.0
     count = sum(1 for t in slam_timestamps if t > cutoff)
-    msgs_per_sec = count / 2.0
+    msgs_per_sec = count / 2.0  # thresholds tuned on bench with the real SLAM rig
     if msgs_per_sec >= 20:
         status = "ok"
     elif msgs_per_sec >= 10:

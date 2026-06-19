@@ -21,8 +21,8 @@ FIELD_TYPES = {
     "car/slam/pose": {
         "seq": int,
         "ok":  bool,
-        "x":   _float_or_none,   # None when tracking lost → dropped
-        "z":   _float_or_none,
+    "x":   _float_or_none,   # None when tracking lost — influx drops fields, not points
+    "z":   _float_or_none,
     },
     "car/imu": {
         "heading_deg": float,
@@ -54,7 +54,7 @@ def _infer_type(value):
         return float(value)
     if isinstance(value, str):
         return str(value)
-    return None   # drop
+    return None
 
 
 influx_client = InfluxDBClient(
@@ -99,6 +99,7 @@ def _write_point(topic: str, payload: dict):
 
 def on_connect(c, userdata, flags, rc):
     if rc == 0:
+        # wish paho had an async mode, the threading is awkward here
         print(f"[MQTT]  connected to {BROKER_HOST}:{BROKER_PORT}")
         c.subscribe("car/#")
         print("[MQTT]  subscribed to car/#")

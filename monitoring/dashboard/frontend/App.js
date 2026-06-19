@@ -27,7 +27,7 @@ const API_BASE = "http://localhost:8000";
 const WS_URL = "ws://localhost:8000/ws";
 const MAX_PATH_POINTS = 500;
 const MAX_CHART_POINTS = 200;
-const POSITION_JUMP_MAGNITUDE = 2.0;
+const POSITION_JUMP_MAGNITUDE = 2.0; // eyeballed from sim replay logs, not from any spec
 const ANOMALY_TYPES = [{
   key: "tracking_loss",
   label: "Tracking Loss",
@@ -108,6 +108,7 @@ const STATIONS = {
 };
 const ROUTE = [["start", "station_1"], ["station_1", "station_2"], ["station_2", "start"]];
 function computeElbow(fromName, toName) {
+  // mirrors the Python _compute_elbow — kept in sync manually
   const src = STATIONS[fromName];
   const dst = STATIONS[toName];
   const [cx, cz] = fromName === "start" ? [src.x, src.z] : src.standoff;
@@ -138,6 +139,7 @@ function fmtTime(ts) {
     hour12: false
   });
 }
+// nothing special here — just ISO timestamps are ugly on a dashboard
 function fmtDuration(seconds) {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   const m = Math.floor(seconds / 60);
@@ -310,7 +312,6 @@ function PositionPathChart({
   }, [liveSlam]);
   const currentPos = points.length > 0 ? points[points.length - 1] : null;
 
-  // Custom dot to show trail
   const renderDot = props => {
     const {
       cx,
@@ -712,7 +713,6 @@ function PhaseTimeline({
     if (livePhase && livePhase.phase) {
       setSegments(prev => {
         const now = typeof livePhase.ts === "number" ? livePhase.ts : Date.now() / 1000;
-        // Close last segment
         const updated = prev.map((s, i) => {
           if (i === prev.length - 1 && s.duration === 0) {
             return {
@@ -833,7 +833,6 @@ function AnomalyInjectionPanel({
     }).catch(() => {});
   };
 
-  // Publish motor_stall severity on first activation
   const prevMotorRef = useRef(toggles.motor_stall);
   useEffect(() => {
     if (toggles.motor_stall && !prevMotorRef.current) {
@@ -873,7 +872,6 @@ function AnomalyInjectionPanel({
     }).catch(() => {});
   };
 
-  // Publish slam params on first activation
   const prevSlamRef = useRef(toggles.slam_low_feature);
   useEffect(() => {
     if (toggles.slam_low_feature && !prevSlamRef.current) {

@@ -1,0 +1,112 @@
+=================================================================
+  SIMULATOR STRESS TEST REPORT  v2
+  2026-06-19 17:56:25
+=================================================================
+
+  PASSED: 18/18   FAILED: 0/18
+
+
+─────────────────────────────────────────────────────────────────
+  ALL RESULTS
+─────────────────────────────────────────────────────────────────
+
+  ✅ [39.9s] ROUTE: start → station_1 → station_2 → start
+       All 3 legs completed: start→s1→s2→start
+         leg start→station_1: arrived=True  phases={'phase1', 'phase3', 'aligning', 'arrived', 'phase2'}  slam_ok=1741
+         leg station_1→station_2: arrived=True  phases={'phase1', 'phase3', 'aligning', 'departing', 'arrived', 'phase2'}  slam_ok=1444
+         leg station_2→start: arrived=True  phases={'phase1', 'phase3', 'aligning', 'departing', 'arrived', 'phase2'}  slam_ok=1416
+
+  ✅ [37.1s] ROUTE: start → station_2 → station_1 → start
+       All 3 legs completed: start→s2→s1→start
+         leg start→station_2: arrived=True  phases={'phase1', 'phase3', 'aligning', 'departing', 'arrived', 'phase2'}  slam_ok=1425
+         leg station_2→station_1: arrived=True  phases={'phase1', 'phase3', 'aligning', 'departing', 'arrived', 'phase2'}  slam_ok=1460
+         leg station_1→start: arrived=True  phases={'phase1', 'phase3', 'aligning', 'departing', 'arrived', 'phase2'}  slam_ok=1389
+
+  ✅ [23.6s] Baseline: clean run, no anomalies
+       Arrived cleanly. Phases: {'phase1', 'phase3', 'aligning', 'departing', 'arrived', 'phase2'}
+
+  ✅ [16.8s] tracking_loss: SLAM goes ok=False mid-drive
+       503 lost poses, 2 phase events
+         slam ok=False count: 503
+         tracking_lost phase events: 2
+         sim _docked_at will be: start
+
+  ✅ [19.0s] motor_stall severity=1.0: position frozen
+       1591 stall events, position frozen
+         stall anomaly events: 1591
+         x spread while stalled: 0.0000m
+         CRIT events: 1562
+
+  ✅ [19.0s] motor_stall severity=0.5: arc drift
+       Arc drift confirmed, total spread=1.2837m
+         stall events: 1251
+         x spread: 0.5056m  z spread: 0.7781m
+         total spread: 1.2837m
+
+  ✅ [75.0s] position_jump: fires at spin, resets on re-inject
+       Fired on inject, reset and re-fired on re-inject
+         position_jump events on first inject: 2
+         magnitude=0.1424m  jump=(-0.1348,0.0461)
+         position_jump events after re-inject: 2
+
+  ✅ [24.2s] phase_timeout: phases slow down
+       Completed (timeout effect visible as slower wall-clock): ['phase1', 'phase2', 'phase3', 'aligning', 'arrived']
+         phases seen: ['phase1', 'phase2', 'phase3', 'aligning', 'arrived']
+
+  ✅ [42.4s] imu_static_drift: heading drifts in arrived
+       Drift confirmed: 0.3130° accumulated over 40s
+         IMU samples: 7378
+         heading spread: 0.310°
+         max accumulated_drift: 0.3130°
+         window: 40s real-time
+
+  ✅ [18.8s] trajectory_drift: lateral bend during drive
+       Lateral bend confirmed: max_dev=0.0200m
+         slam samples with drift ON: 1628
+         max perpendicular deviation: 0.0200m
+
+  ✅ [12.2s] slam_low_feature: rate decays + recovers
+       Rate decayed: 13.0ms → 17.3ms gap
+         SLAM samples collected: 254
+         early samples (first 0.8s): 62  avg gap: 13.0ms
+         late samples (last 0.8s):  47  avg gap:  17.3ms
+         recovery avg gap: 8.7ms
+
+  ✅ [27.1s] COMBO: tracking_loss + motor_stall
+       Both anomalies fired simultaneously
+         slam ok=False: 804
+         motor_stall events: 17
+         tracking_lost phase: 2
+
+  ✅ [16.6s] COMBO: imu_drift suppressed by motor_stall
+       Drift suppressed as expected (max 0.1080°)
+         IMU samples: 2662
+         max accumulated_drift: 0.1080°
+
+  ✅ [27.1s] COMBO: trajectory_drift + motor_stall
+       Both active, no crash, stall events present
+         stall events: 1198
+         slam ok=True samples: 2555
+
+  ✅ [27.8s] COMBO: all 7 anomalies at once
+       Simulator alive with all anomalies: 5148 msgs
+         car/imu: 4308 msgs
+         car/motors: 2 msgs
+         car/nav/phase: 2 msgs
+         car/slam/pose: 836 msgs
+         total: 5148 msgs across 4 topics
+
+  ✅ [12.7s] STRESS: rapid on/off toggle (10 cycles)
+       Stable after 10 rapid toggles (910 msgs)
+         messages after 10 on/off cycles: 910
+
+  ✅ [113.3s] position_jump reset across 3 cycles
+       Jump reset correctly across 3 cycles: [2, 2, 2]
+         jumps per cycle: [2, 2, 2]
+
+  ✅ [12.7s] sim_speed: resilience at 0.25x and 4x
+       SLAM received at both speed extremes
+         speed=0.25x → 38 SLAM msgs in 5s
+         speed=4.0x → 574 SLAM msgs in 5s
+
+=================================================================
