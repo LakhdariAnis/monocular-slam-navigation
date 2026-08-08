@@ -553,12 +553,9 @@ function computeElbow(fromName, toName) {
       );
     }
 
-    const MAX_FEED_ENTRIES = 50;
-
     // ── Anomaly Feed ──
     function AnomalyFeed() {
-      const [anomalies, setAnomalies] = useState([]);
-      const seenTs = useRef(new Set());
+      const [anomalies, setAnomalies] = useState({});
 
       useEffect(() => {
         let alive = true;
@@ -568,15 +565,11 @@ function computeElbow(fromName, toName) {
             .then(data => {
               if (!alive || !Array.isArray(data)) return;
               setAnomalies(prev => {
-                const next = [...prev];
+                const next = { ...prev };
                 for (const entry of data) {
-                  const ts = entry.ts;
-                  if (ts != null && !seenTs.current.has(ts)) {
-                    seenTs.current.add(ts);
-                    next.unshift(entry);
-                  }
+                  if (entry.type != null) next[entry.type] = entry;
                 }
-                return next.slice(0, MAX_FEED_ENTRIES);
+                return next;
               });
             })
             .catch(() => {});
@@ -588,8 +581,7 @@ function computeElbow(fromName, toName) {
 
       const handleClear = () => {
         fetch(`${API_BASE}/anomalies/clear`, { method: "POST" }).catch(() => {});
-        setAnomalies([]);
-        seenTs.current = new Set();
+        setAnomalies({});
       };
 
       return (
@@ -606,15 +598,15 @@ function computeElbow(fromName, toName) {
             </button>
           </div>
           <div className="overflow-y-auto max-h-[260px] p-3 space-y-2">
-            {anomalies.length === 0 && (
+            {Object.keys(anomalies).length === 0 && (
               <div className="text-sm text-on-surface-variant text-center py-4">No anomalies detected</div>
             )}
-            {anomalies.map((entry) => {
+            {Object.entries(anomalies).map(([type, entry]) => {
               const isCleared = entry.severity === "CLEARED";
               const severityColor = isCleared ? "#4ade80" : entry.severity === "WARN" ? "#facc15" : "#ff6b6b";
               const isMotorStall = entry.type === "motor_stall";
               return (
-                <div key={entry.ts} className="flex items-start gap-3 p-2.5 rounded-lg"
+                <div key={type} className="flex items-start gap-3 p-2.5 rounded-lg"
                      style={{
                        background: `${severityColor}10`,
                        border: `1px solid ${severityColor}30`,
@@ -630,13 +622,19 @@ function computeElbow(fromName, toName) {
                       </span>
                       <span className="font-label text-[10px] text-on-surface-variant ml-auto whitespace-nowrap">{fmtTime(entry.ts)}</span>
                     </div>
-                    {!isCleared && (
+                    {isCleared ? (
+                    <div className="font-label text-[11px] mt-1" style={{ color: "#4ade80" }}>
+                      ✓ cleared
+                    </div>
+                    ) : (
                     <div className="font-label text-[11px] text-on-surface-variant mt-1">
                       {isMotorStall ? (
                         <>
-                          {entry.severity === "WARN" ? "arc drift" : "full freeze"}
-                          {" — "}x spread: {Number(entry.x_spread).toFixed(4)}
-                          {" / "}z spread: {Number(entry.z_spread).toFixed(4)}
+                          {entry.position_spread_mm != null ? (
+                            <>stall — spread {Number(entry.position_spread_mm).toFixed(2)}mm · w-ratio {Number(entry.w_true_ratio).toFixed(2)}</>
+                          ) : (
+                            <>spinning — freeze_streak {entry.freeze_streak}</>
+                          )}
                         </>
                       ) : (
                         <>{entry.false_count}/{entry.total_count} false ({entry.false_ratio})</>

@@ -40,7 +40,7 @@ ws_clients: set[WebSocket] = set()
 ws_clients_lock = asyncio.Lock()
 
 slam_timestamps: collections.deque = collections.deque(maxlen=60)
-anomaly_feed: collections.deque = collections.deque(maxlen=50)
+anomaly_feed: dict[str, dict] = {}   # one entry per anomaly type
 
 # same ZMQ pattern as the SLAM project
 _mqtt_queue: asyncio.Queue | None = None
@@ -163,12 +163,9 @@ async def _mqtt_consumer():
             for ws in stale:
                 ws_clients.discard(ws)
 
-        if topic in ("car/anomaly/tracking_loss", "car/anomaly/motor_stall"):
-            if topic == "car/anomaly/motor_stall" and "motor_active_ratio" not in payload:
-                continue
-            keys = payload.keys()
-            entry = {k: payload.get(k) for k in keys}
-            anomaly_feed.append(entry)
+        if topic.startswith("car/anomaly/"):
+            entry = dict(payload)
+            anomaly_feed[entry.get("type") or topic] = entry
             msg = json.dumps({"_anomaly": True, "entry": entry})
             async with ws_clients_lock:
                 stale = []
@@ -368,7 +365,7 @@ async def sim_reset():
 
 @app.get("/anomalies")
 async def get_anomalies():
-    return list(anomaly_feed)
+    return list(anomaly_feed.values())
 
 
 @app.post("/anomalies/clear")

@@ -400,15 +400,6 @@ def _handle_motor_stall_tick(fdx, fdz, fspd, intent):
         _motor_stall_force_immobile = True
 
         sev_label = "CRIT" if _motor_stall_freeze_streak >= 30 else "WARN"
-        publish(
-            "car/anomaly/motor_stall",
-            {
-                "type": "motor_stall",
-                "severity": sev_label,
-                "freeze_streak": _motor_stall_freeze_streak,
-                "ts": now,
-            },
-        )
 
     else:
         _motor_stall_freeze_streak = 0
@@ -435,16 +426,6 @@ def _handle_motor_stall_tick(fdx, fdz, fspd, intent):
         heading_delta = lateral_mag * heading_drift_per_unit * _motor_stall_arc_side
         with state.lock:
             state.heading_deg = (state.heading_deg + heading_delta) % 360
-
-        publish(
-            "car/anomaly/motor_stall",
-            {
-                "type": "motor_stall",
-                "severity": "WARN",
-                "freeze_streak": 0,
-                "ts": now,
-            },
-        )
 
 
 def slam_loop():

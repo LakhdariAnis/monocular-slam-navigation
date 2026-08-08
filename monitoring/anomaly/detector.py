@@ -4,7 +4,8 @@ import os
 import time
 
 import paho.mqtt.client as mqtt
-from influxdb_client import InfluxDBClient
+from influxdb_client import InfluxDBClient, Point, WritePrecision
+from influxdb_client.client.write_api import SYNCHRONOUS
 
 MQTT_BROKER_HOST = "localhost"
 MQTT_BROKER_PORT = 1883
@@ -22,9 +23,35 @@ TRACKING_LOSS_THRESHOLD_RATIO = 0.6
 
 TRACKING_LOSS_TOPIC = "car/anomaly/tracking_loss"
 
+# motor stall
+MOTOR_STALL_WINDOW_S = 6
+MOTOR_STALL_W_RATIO_THRESHOLD = 0.7
+MOTOR_STALL_SPREAD_MM_THRESHOLD = 4
+
+MOTOR_STALL_TOPIC = "car/anomaly/motor_stall"
+
 _last_state = {
     "tracking_loss": None,
+    "motor_stall": None,
 }
+
+
+def _write_anomaly_to_influx(influx, payload_dict):
+    write_api = influx.write_api(write_options=SYNCHRONOUS)
+    ts_unix = payload_dict.get("ts", time.time())
+    ts_ns = int(float(ts_unix) * 1_000_000_000)
+    
+    point = Point("car/anomaly") \
+        .tag("type", payload_dict.get("type")) \
+        .tag("severity", payload_dict.get("severity")) \
+        .time(ts_ns, WritePrecision.NS)
+        
+    for k, v in payload_dict.items():
+        if k not in ("type", "severity"):
+            point.field(k, v)
+            
+    write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
+
 
 
 def _query_flux(influx, measurement, fields, window_s):
@@ -96,6 +123,61 @@ def _run_tracking_loss_check(influx):
     }
 
 
+def _get_last_known_w(influx, before_time_s_ago):
+    """Find the most recent car/motors 'w' value at or before window start."""
+    flux = f"""
+from(bucket: "{INFLUX_BUCKET}")
+  |> range(start: -30m, stop: -{before_time_s_ago}s)
+  |> filter(fn: (r) => r["_measurement"] == "car/motors")
+  |> filter(fn: (r) => r["_field"] == "w")
+  |> sort(columns: ["_time"], desc: true)
+  |> limit(n: 1)
+"""
+    query_api = influx.query_api()
+    tables = query_api.query(flux, org=INFLUX_ORG)
+    for table in tables:
+        for record in table.records:
+            return record.get_value()
+    return None  # no prior state found
+
+
+def _run_motor_stall_crit_check(influx):
+    last_w = _get_last_known_w(influx, MOTOR_STALL_WINDOW_S)
+    rows = _query_flux(influx, "car/motors", ["w"], MOTOR_STALL_WINDOW_S)
+    w_values = ([last_w] if last_w is not None else []) + [r.get("w") for r in rows]
+    w_values = [w for w in w_values if w is not None]
+
+    if not w_values:
+        print("[DEBUG motor_stall] no w_values -> None")
+        return None
+
+    true_ratio = sum(1 for w in w_values if w is True) / len(w_values)
+    if true_ratio < MOTOR_STALL_W_RATIO_THRESHOLD:
+        print(f"[DEBUG motor_stall] last_w={last_w} rows={rows} ratio={true_ratio} -> below threshold, None")
+        return None
+
+    pose_rows = _query_flux(influx, "car/slam/pose", ["x", "z"], MOTOR_STALL_WINDOW_S)
+    xs = [r["x"] for r in pose_rows if r.get("x") is not None]
+    zs = [r["z"] for r in pose_rows if r.get("z") is not None]
+
+    if not xs or not zs:
+        print("[DEBUG motor_stall] no pose data -> None")
+        return None
+
+    spread_m = (max(xs) - min(xs)) + (max(zs) - min(zs))
+    spread_mm = spread_m * 1000
+    if spread_mm >= MOTOR_STALL_SPREAD_MM_THRESHOLD:
+        print(f"[DEBUG motor_stall] spread_mm={spread_mm} -> too large, None")
+        return None
+
+    return {
+        "type": "motor_stall", "severity": "CRIT",
+        "w_true_ratio": round(true_ratio, 4),
+        "position_spread_mm": round(spread_mm, 4),
+        "ts": time.time(),
+    }
+
+
 def main():
     influx = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
 
@@ -111,20 +193,38 @@ def main():
             current = result["severity"] if result else None
             if current != _last_state["tracking_loss"]:
                 if current is None:
-                    payload = json.dumps(
-                        {
-                            "type": "tracking_loss",
-                            "severity": "CLEARED",
-                            "ts": time.time(),
-                        }
-                    )
+                    payload_dict = {
+                        "type": "tracking_loss",
+                        "severity": "CLEARED",
+                        "ts": time.time(),
+                    }
                 else:
-                    payload = json.dumps(result)
+                    payload_dict = result
+                payload = json.dumps(payload_dict)
                 mqttc.publish(TRACKING_LOSS_TOPIC, payload, qos=0)
                 print(f"[ANOMALY] {TRACKING_LOSS_TOPIC} <- {payload}")
+                _write_anomaly_to_influx(influx, payload_dict)
                 _last_state["tracking_loss"] = current
 
+            result = _run_motor_stall_crit_check(influx)
+            current = result["severity"] if result else None
+            if current != _last_state["motor_stall"]:
+                if current is None:
+                    payload_dict = {
+                        "type": "motor_stall",
+                        "severity": "CLEARED",
+                        "ts": time.time(),
+                    }
+                else:
+                    payload_dict = result
+                payload = json.dumps(payload_dict)
+                mqttc.publish(MOTOR_STALL_TOPIC, payload, qos=0)
+                print(f"[ANOMALY] {MOTOR_STALL_TOPIC} <- {payload}")
+                _write_anomaly_to_influx(influx, payload_dict)
+                _last_state["motor_stall"] = current
+
             print(f"[DETECTOR] tracking_loss={_last_state['tracking_loss']}")
+            print(f"[DETECTOR] motor_stall={_last_state['motor_stall']}")
 
             time.sleep(CHECK_INTERVAL_S)
     except KeyboardInterrupt:

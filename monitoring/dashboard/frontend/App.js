@@ -685,27 +685,23 @@ function SlamRatePanel() {
     }
   }, "✖ SLAM rate critical — car may stop"));
 }
-const MAX_FEED_ENTRIES = 50;
 
 // ── Anomaly Feed ──
 function AnomalyFeed() {
-  const [anomalies, setAnomalies] = useState([]);
-  const seenTs = useRef(new Set());
+  const [anomalies, setAnomalies] = useState({});
   useEffect(() => {
     let alive = true;
     const poll = () => {
       fetch(`${API_BASE}/anomalies`).then(r => r.json()).then(data => {
         if (!alive || !Array.isArray(data)) return;
         setAnomalies(prev => {
-          const next = [...prev];
+          const next = {
+            ...prev
+          };
           for (const entry of data) {
-            const ts = entry.ts;
-            if (ts != null && !seenTs.current.has(ts)) {
-              seenTs.current.add(ts);
-              next.unshift(entry);
-            }
+            if (entry.type != null) next[entry.type] = entry;
           }
-          return next.slice(0, MAX_FEED_ENTRIES);
+          return next;
         });
       }).catch(() => {});
     };
@@ -720,8 +716,7 @@ function AnomalyFeed() {
     fetch(`${API_BASE}/anomalies/clear`, {
       method: "POST"
     }).catch(() => {});
-    setAnomalies([]);
-    seenTs.current = new Set();
+    setAnomalies({});
   };
   return /*#__PURE__*/React.createElement("div", {
     id: "anomaly-feed",
@@ -745,14 +740,14 @@ function AnomalyFeed() {
     onMouseLeave: e => e.target.style.background = "rgba(160, 180, 196, 0.1)"
   }, "Clear Feed")), /*#__PURE__*/React.createElement("div", {
     className: "overflow-y-auto max-h-[260px] p-3 space-y-2"
-  }, anomalies.length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, Object.keys(anomalies).length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "text-sm text-on-surface-variant text-center py-4"
-  }, "No anomalies detected"), anomalies.map(entry => {
+  }, "No anomalies detected"), Object.entries(anomalies).map(([type, entry]) => {
     const isCleared = entry.severity === "CLEARED";
     const severityColor = isCleared ? "#4ade80" : entry.severity === "WARN" ? "#facc15" : "#ff6b6b";
     const isMotorStall = entry.type === "motor_stall";
     return /*#__PURE__*/React.createElement("div", {
-      key: entry.ts,
+      key: type,
       className: "flex items-start gap-3 p-2.5 rounded-lg",
       style: {
         background: `${severityColor}10`,
@@ -778,9 +773,14 @@ function AnomalyFeed() {
       }
     }, entry.severity), /*#__PURE__*/React.createElement("span", {
       className: "font-label text-[10px] text-on-surface-variant ml-auto whitespace-nowrap"
-    }, fmtTime(entry.ts))), !isCleared && /*#__PURE__*/React.createElement("div", {
+    }, fmtTime(entry.ts))), isCleared ? /*#__PURE__*/React.createElement("div", {
+      className: "font-label text-[11px] mt-1",
+      style: {
+        color: "#4ade80"
+      }
+    }, "✓ cleared") : /*#__PURE__*/React.createElement("div", {
       className: "font-label text-[11px] text-on-surface-variant mt-1"
-    }, isMotorStall ? /*#__PURE__*/React.createElement(React.Fragment, null, entry.severity === "WARN" ? "arc drift" : "full freeze", " — ", "x spread: ", Number(entry.x_spread).toFixed(4), " / ", "z spread: ", Number(entry.z_spread).toFixed(4)) : /*#__PURE__*/React.createElement(React.Fragment, null, entry.false_count, "/", entry.total_count, " false (", entry.false_ratio, ")"))));
+    }, isMotorStall ? /*#__PURE__*/React.createElement(React.Fragment, null, entry.position_spread_mm != null ? /*#__PURE__*/React.createElement(React.Fragment, null, "stall — spread ", Number(entry.position_spread_mm).toFixed(2), "mm · w-ratio ", Number(entry.w_true_ratio).toFixed(2)) : /*#__PURE__*/React.createElement(React.Fragment, null, "spinning — freeze_streak ", entry.freeze_streak)) : /*#__PURE__*/React.createElement(React.Fragment, null, entry.false_count, "/", entry.total_count, " false (", entry.false_ratio, ")"))));
   })));
 }
 
@@ -1153,11 +1153,9 @@ function MapCanvas({
     const scale = Math.min(scaleX, scaleZ);
     const wx = x => PAD + (x - X_MIN) * scale;
     const wz = z => H - PAD - (z - Z_MIN) * scale;
-
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = "#0d1117";
     ctx.fillRect(0, 0, W, H);
-
     ctx.strokeStyle = "rgba(255,255,255,0.06)";
     ctx.lineWidth = 1;
     ctx.setLineDash([]);
@@ -1179,7 +1177,6 @@ function MapCanvas({
       ctx.lineTo(W, pz);
       ctx.stroke();
     }
-
     const RW = 18,
       RH = 10;
     ctx.textAlign = "center";
@@ -1200,7 +1197,6 @@ function MapCanvas({
     const slam = snapshot["car/slam/pose"];
     const imu = snapshot["car/imu"];
     const phase = snapshot["car/nav/phase"];
-
     if (slam && slam.x != null && slam.z != null) {
       const cx = wx(slam.x),
         cz = wz(slam.z);
@@ -1212,7 +1208,6 @@ function MapCanvas({
       ctx.strokeStyle = "#30363d";
       ctx.lineWidth = 1.5;
       ctx.stroke();
-
       const ax = cx + Math.cos(hdgRad) * ARROW_LEN;
       const az = cz + Math.sin(hdgRad) * ARROW_LEN;
       ctx.beginPath();
@@ -1223,7 +1218,6 @@ function MapCanvas({
       ctx.lineCap = "round";
       ctx.stroke();
       ctx.lineCap = "butt";
-
       ctx.fillStyle = "#8b949e";
       ctx.font = "500 10px system-ui";
       ctx.textAlign = "center";
@@ -1347,7 +1341,6 @@ function App() {
       clearInterval(id);
     };
   }, []);
-
   const [toggles, setToggles] = useState(Object.fromEntries(ANOMALY_TYPES.map(a => [a.key, false])));
   const handleToggle = useCallback(async key => {
     const newVal = !toggles[key];

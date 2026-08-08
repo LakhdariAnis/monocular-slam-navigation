@@ -101,8 +101,11 @@ def on_connect(c, userdata, flags, rc):
     if rc == 0:
         # wish paho had an async mode, the threading is awkward here
         print(f"[MQTT]  connected to {BROKER_HOST}:{BROKER_PORT}")
-        c.subscribe("car/#")
-        print("[MQTT]  subscribed to car/#")
+        c.subscribe("car/slam/pose")
+        c.subscribe("car/imu")
+        c.subscribe("car/motors")
+        c.subscribe("car/nav/phase")
+        print("[MQTT]  subscribed to telemetry topics")
     else:
         print(f"[MQTT]  connection failed rc={rc} — will retry")
 
