@@ -669,14 +669,7 @@ function SlamRatePanel() {
     style: {
       color
     }
-  }, msgs_per_sec.toFixed(1))), status === "warn" && /*#__PURE__*/React.createElement("div", {
-    className: "px-3 py-2 rounded text-sm font-body",
-    style: {
-      background: "rgba(250,204,21,0.12)",
-      border: "1px solid rgba(250,204,21,0.35)",
-      color: "#facc15"
-    }
-  }, "⚠ Low SLAM feature rate — degraded tracking"), status === "critical" && /*#__PURE__*/React.createElement("div", {
+  }, msgs_per_sec.toFixed(1))), status === "critical" && /*#__PURE__*/React.createElement("div", {
     className: "px-3 py-2 rounded text-sm font-body",
     style: {
       background: "rgba(255,107,107,0.12)",

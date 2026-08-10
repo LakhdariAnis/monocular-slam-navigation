@@ -525,18 +525,6 @@ function computeElbow(fromName, toName) {
             </span>
           </div>
 
-          {status === "warn" && (
-            <div
-              className="px-3 py-2 rounded text-sm font-body"
-              style={{
-                background: "rgba(250,204,21,0.12)",
-                border: "1px solid rgba(250,204,21,0.35)",
-                color: "#facc15",
-              }}
-            >
-              ⚠ Low SLAM feature rate — degraded tracking
-            </div>
-          )}
           {status === "critical" && (
             <div
               className="px-3 py-2 rounded text-sm font-body"

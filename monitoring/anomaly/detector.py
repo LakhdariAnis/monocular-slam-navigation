@@ -40,10 +40,17 @@ IMU_DRIFT_MIN_ACCEL_RATIO = 1.01
 
 IMU_DRIFT_TOPIC = "car/anomaly/imu_static_drift"
 
+# slam low feature
+SLAM_LOW_FEATURE_WINDOW_S = 5
+SLAM_LOW_FEATURE_MIN_RATE_HZ = 22
+
+SLAM_LOW_FEATURE_TOPIC = "car/anomaly/slam_low_feature"
+
 _last_state = {
     "tracking_loss": None,
     "motor_stall": None,
     "imu_static_drift": None,
+    "slam_low_feature": None,
 }
 
 
@@ -233,12 +240,10 @@ def _run_motor_stall_crit_check(influx):
     w_values = [w for w in w_values if w is not None]
 
     if not w_values:
-        print("[DEBUG motor_stall] no w_values -> None")
         return None
 
     true_ratio = sum(1 for w in w_values if w is True) / len(w_values)
     if true_ratio < MOTOR_STALL_W_RATIO_THRESHOLD:
-        print(f"[DEBUG motor_stall] last_w={last_w} rows={rows} ratio={true_ratio} -> below threshold, None")
         return None
 
     pose_rows = _query_flux(influx, "car/slam/pose", ["x", "z"], MOTOR_STALL_WINDOW_S)
@@ -246,13 +251,11 @@ def _run_motor_stall_crit_check(influx):
     zs = [r["z"] for r in pose_rows if r.get("z") is not None]
 
     if not xs or not zs:
-        print("[DEBUG motor_stall] no pose data -> None")
         return None
 
     spread_m = (max(xs) - min(xs)) + (max(zs) - min(zs))
     spread_mm = spread_m * 1000
     if spread_mm >= MOTOR_STALL_SPREAD_MM_THRESHOLD:
-        print(f"[DEBUG motor_stall] spread_mm={spread_mm} -> too large, None")
         return None
 
     return {
@@ -271,9 +274,6 @@ def _run_motor_stall_crit_check(influx):
 
 
 def _run_imu_static_drift_check(influx):
-    print("\n" + "="*50)
-    print(f"[IMU DRIFT] Checking last {IMU_DRIFT_WINDOW_S}s for static drift...")
-    
     # --- Step 1: Stationary gate — motor commands (sparse, carry-forward) ---
     last_motors = _get_last_known_motors(influx, IMU_DRIFT_WINDOW_S)
     motor_rows = _query_flux(
@@ -282,13 +282,11 @@ def _run_imu_static_drift_check(influx):
     all_motor_rows = ([last_motors] if last_motors is not None else []) + motor_rows
 
     if not all_motor_rows:
-        print("  -> No motor history found. Defaulting to motors OFF.")
         all_motor_rows = [{"w": False, "a": False, "s": False, "d": False}]
 
     for idx, row in enumerate(all_motor_rows):
         active_motors = [k for k in ("w", "a", "s", "d") if row.get(k) is True]
         if active_motors:
-            print(f"  -> GATING FAILURE: Motors are active {active_motors}. Car is not stationary.")
             return None
 
     # --- Step 2: Stationary gate — IMU moving field (constant freq, no carry-forward) ---
@@ -298,17 +296,13 @@ def _run_imu_static_drift_check(influx):
 
     moving_rows = [r for r in imu_rows if r.get("moving") is True]
     if moving_rows:
-        print("  -> GATING FAILURE: IMU detects physical movement. Car is not stationary.")
         return None
 
     # --- Step 3: Sufficient data check ---
     headings = [r["heading_deg"] for r in imu_rows if r.get("heading_deg") is not None]
 
     if len(headings) < 4:
-        print(f"  -> GATING FAILURE: Only {len(headings)} heading samples found (too few to analyze).")
         return None
-
-    print(f"  -> Data OK: Found {len(headings)} valid samples. Car is stationary.")
 
     # --- Step 4: Split-half linear regression trend analysis ---
     unwrapped = _unwrap_headings(headings)
@@ -326,24 +320,8 @@ def _run_imu_static_drift_check(influx):
     is_rate_significant = abs_rate_second > IMU_DRIFT_RATE_THRESHOLD
     is_accelerating = abs_rate_second > required_accel_rate
 
-    print(f"  -> 1st half drift speed: {rate_first:.6f} deg/sample")
-    print(f"  -> 2nd half drift speed: {rate_second:.6f} deg/sample")
-    
-    if is_rate_significant:
-        print("  -> Check 1: Rate is significant? YES")
-    else:
-        print("  -> Check 1: Rate is significant? NO (Too slow)")
-
-    if is_accelerating:
-        print("  -> Check 2: Rate is accelerating? YES")
-    else:
-        print("  -> Check 2: Rate is accelerating? NO (Steady or slowing down)")
-
     if not (is_rate_significant and is_accelerating):
-        print("  -> RESULT: Normal behavior (No CRIT alert)")
         return None
-
-    print("  -> RESULT: *** CRITICAL STATIC DRIFT DETECTED ***")
     return {
         "type": "imu_static_drift",
         "severity": "CRIT",
@@ -352,6 +330,27 @@ def _run_imu_static_drift_check(influx):
         "acceleration": round(abs(rate_second) - abs(rate_first), 6),
         "heading_start": headings[0],
         "heading_end": headings[-1],
+        "ts": time.time(),
+    }
+
+
+def _run_slam_low_feature_check(influx):
+    rows = _query_flux(influx, "car/slam/pose", ["ok"], SLAM_LOW_FEATURE_WINDOW_S)
+    total = len(rows)
+
+    if total == 0:
+        return None
+
+    rate_hz = total / SLAM_LOW_FEATURE_WINDOW_S
+
+    if rate_hz >= SLAM_LOW_FEATURE_MIN_RATE_HZ:
+        return None
+
+    return {
+        "type": "slam_low_feature",
+        "severity": "WARN",
+        "msg_count": total,
+        "rate_hz": round(rate_hz, 4),
         "ts": time.time(),
     }
 
@@ -418,7 +417,25 @@ def main():
                 _write_anomaly_to_influx(influx, payload_dict)
                 _last_state["imu_static_drift"] = current
 
-            print(f"[DETECTOR] imu_static_drift={_last_state['imu_static_drift']}")
+            result = _run_slam_low_feature_check(influx)
+            current = result["severity"] if result else None
+            if current != _last_state["slam_low_feature"]:
+                if current is None:
+                    payload_dict = {
+                        "type": "slam_low_feature",
+                        "severity": "CLEARED",
+                        "ts": time.time(),
+                    }
+                else:
+                    payload_dict = result
+                payload = json.dumps(payload_dict)
+                mqttc.publish(SLAM_LOW_FEATURE_TOPIC, payload, qos=0)
+                print(f"[ANOMALY] {SLAM_LOW_FEATURE_TOPIC} <- {payload}")
+                _write_anomaly_to_influx(influx, payload_dict)
+                _last_state["slam_low_feature"] = current
+
+            state_strs = [f"{k}: {'FOUND' if v else 'NOT FOUND'}" for k, v in _last_state.items()]
+            print(f"[DETECTOR] {' | '.join(state_strs)}")
 
             time.sleep(CHECK_INTERVAL_S)
     except KeyboardInterrupt:
