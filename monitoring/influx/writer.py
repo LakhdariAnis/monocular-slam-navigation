@@ -57,12 +57,14 @@ def _infer_type(value):
     return None
 
 
+from influxdb_client.client.write_api import ASYNCHRONOUS
+
 influx_client = InfluxDBClient(
     url=INFLUX_URL,
     token=INFLUX_TOKEN,
     org=INFLUX_ORG,
 )
-write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+write_api = influx_client.write_api(write_options=ASYNCHRONOUS)
 
 
 def _write_point(topic: str, payload: dict):
