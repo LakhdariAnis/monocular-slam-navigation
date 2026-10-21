@@ -9,7 +9,7 @@ This modified ORB-SLAM3 system functions as a dual-mode monocular tracker with a
 ## New Features
 
 ### 1. ArUco Marker Relocalization
-It detects ArUco markers (`cv::aruco::detectMarkers` around line 535) and stamps white squares over their corners using `stamp_aruco_corners` so they become strong ORB features. In localization mode, when visual tracking is lost (`!ok`), if a known ArUco marker is visible in the scene, the system transitions from IDLE to MAPPING_MODE (`SLAM.DeactivateLocalizationMode()`). It simultaneously computes the exact camera world pose from ArUco PnP (`cv::aruco::estimatePoseSingleMarkers`). This was needed because standard visual relocalization can be slow or fail entirely; absolute physical markers give known global poses to instantly relocalize the robot without unpredictable feature matching.
+It detects ArUco markers (`cv::aruco::detectMarkers` in `slam_reader.cc`) and stamps white squares over their corners using `stamp_aruco_corners` so they become strong ORB features. In localization mode, when visual tracking is lost (`!ok`), if a known ArUco marker is visible in the scene, the system transitions from IDLE to MAPPING_MODE (`SLAM.DeactivateLocalizationMode()`). It simultaneously computes the exact camera world pose from ArUco PnP (`cv::aruco::estimatePoseSingleMarkers`). This was needed because standard visual relocalization can be slow or fail entirely; absolute physical markers give known global poses to instantly relocalize the robot without unpredictable feature matching.
 
 ### 2. External Pose Injection API
 The `InjectPoseHint` call patches the ORB-SLAM3 tracker's `mLastFrame.pose` when the tracker is lost, overwriting it with a given SE3 hint. It simultaneously zeroes the tracker velocity and sets the tracking state to `Tracking::OK`. It enables tracking to instantly restart from an external absolute position (like one derived from ArUco) on the very next frame using `TrackWithMotionModel`, instead of trying to extrapolate from a stale velocity estimate or relying on standard visual relocalization. 
@@ -105,12 +105,12 @@ A secondary guard stops any lingering GBA thread with `StopGBA()` and polls `isR
 
 ### Mapping mode
 ```bash
-./slam_reader --map
+./slam_reader ORBvoc.txt picam.yaml --map [--no-viewer]
 ```
 
 ### Localization mode
 ```bash
-./slam_reader --loc <atlas_name>
+./slam_reader ORBvoc.txt picam.yaml --loc <atlas_name> [--no-viewer]
 ```
 
 ## ZMQ Output

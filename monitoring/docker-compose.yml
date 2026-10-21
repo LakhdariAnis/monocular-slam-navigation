@@ -21,8 +21,8 @@ services:
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=adminpass
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:?set in monitoring/.env}
       - DOCKER_INFLUXDB_INIT_ORG=car_org
       - DOCKER_INFLUXDB_INIT_BUCKET=car_telemetry
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=super-token-123
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:?set in monitoring/.env}
     restart: unless-stopped

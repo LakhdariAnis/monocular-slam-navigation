@@ -32,16 +32,18 @@ Flask HTTP server listening on **port 5000**. The PC navigator sends drive comma
 
 `w/a/s/d` are booleans mapping to `forward / spin-left / reverse / spin-right`. `inner` is the duty cycle (0–100%) applied to the inside wheels during a curve turn — the default is `30` (% duty cycle), producing a tighter arc. The outer wheels always run at 100%.
 
-GPIO control uses the `RPi.GPIO` library in BCM mode. The differential drive layout uses 4 TT motors across 2 × L298N H-bridge drivers with individual PWM speed control at 1 kHz:
+GPIO control uses the `RPi.GPIO` library in BCM mode. The differential drive layout uses 4 TT motors across 2 × L298N H-bridge drivers with individual PWM speed control at 5 kHz:
 
 | Motor | Enable (PWM) | IN_fwd | IN_rev |
 |-------|-------------|--------|--------|
-| Front-Right (FR) | GPIO 12 (ENA) | GPIO 17 (IN1) | GPIO 27 (IN2) |
-| Front-Left  (FL) | GPIO 13 (ENB) | GPIO 22 (IN3) | GPIO 23 (IN4) |
-| Rear-Left   (RL) | GPIO 18 (ENA2)| GPIO 24 (IN5) | GPIO 25 (IN6) |
-| Rear-Right  (RR) | GPIO 19 (ENB2)| GPIO 5  (IN7) | GPIO 6  (IN8) |
+| Front-Right (FR) | GPIO 12 (ENA) | GPIO 23 (IN1) | GPIO 22 (IN2) |
+| Front-Left  (FL) | GPIO 13 (ENB) | GPIO 27 (IN3) | GPIO 17 (IN4) |
+| Rear-Left   (RL) | GPIO 18 (ENA2)| GPIO 6  (IN5) | GPIO 5  (IN6) |
+| Rear-Right  (RR) | GPIO 19 (ENB2)| GPIO 24 (IN7) | GPIO 25 (IN8) |
 
 On-axis spins (`a` or `d` alone) counter-rotate the left/right pairs with no differential reduction — both sides run at full duty cycle.
+
+> **Note:** the navigator also sends a `total` field (e.g. `SPIN_SPEED = 40`, `FORWARD_SPEED = 45`). The `car.py` in this repo ignores it: straight drives and on-axis spins always run at 100% duty, and only `inner` is used (for curve turns). If the car on the Pi runs at 40% during spins, it is running a different `car.py` than the one committed here.
 
 ---
 
@@ -55,11 +57,11 @@ Reads the **MPU-6050** over I²C (bus 1, address `0x68`) at **50 Hz** (`DT = 0.0
 heading = α × (heading + gyro_z × dt) + (1 - α) × accel_heading
 ```
 
-The actual α value in code is **`ALPHA = 0.98`**, weighting the gyroscope heavily for short-term smoothness while bleeding in the accelerometer long-term to arrest drift.
+> **Code reality:** `ALPHA = 0.98` is defined in `imu_zmq.py` but never used. The heading update in code is pure gyro integration (`heading_deg = heading_deg + gz * dt`); drift is limited by ZUPT freezing integration while stationary, not by an accelerometer term.
 
 #### IMU drift problem
 
-The gyroscope integrates angular velocity to maintain heading. Integration accumulates sensor noise — even a stationary sensor will show slow heading creep (gyro drift). The complementary filter counteracts this: the gyro term (`α = 0.98`) is accurate over short intervals, and the accelerometer term (`1 − α = 0.02`) is drift-free over long intervals, keeping the estimate anchored. Two test scripts were used to characterize real-world drift:
+The gyroscope integrates angular velocity to maintain heading. Integration accumulates sensor noise — even a stationary sensor will show slow heading creep (gyro drift). The intended complementary filter would counter this with an accelerometer term, but as noted above it is not wired in; ZUPT is the active mitigation. Two test scripts were used to characterize real-world drift:
 
 - **`test_imu_live.py`** — logged raw gyro drift rate while stationary.
 - **`test_imu_nav.py`** — ran IMU-only dead-reckoning navigation (no SLAM) to quantify accumulated heading error over a full run.
@@ -93,7 +95,7 @@ The script also implements **ZUPT** (Zero-velocity UPdaTe): a sliding-window var
 
 ### `camera_zmq.py` — Camera Publisher
 
-Captures from the **Pi Camera v2** via `picamera2` at **640 × 480** pixels. The loop runs as fast as the camera pipeline allows with no explicit FPS cap — throughput is bounded by I²C encoder latency and the ZMQ send buffer. Frames are JPEG-encoded at quality 80 before transmission.
+Captures from the **Pi Camera v2** via `picamera2` at **640 × 480** pixels. The loop runs as fast as the camera pipeline allows with no explicit FPS cap — throughput is bounded by capture + JPEG encode time on the Pi and the ZMQ send buffer. Frames are JPEG-encoded at quality 80 before transmission.
 
 Publishes raw **JPEG bytes** on **ZMQ PUB port 5555**. No topic prefix — `bridge.py` on the PC subscribes with an empty filter and decodes each message as a JPEG buffer.
 
@@ -139,12 +141,10 @@ python3 camera_zmq.py   # terminal 3 — camera ZMQ publisher on :5555
 - AD0 low → I²C address `0x68`
 
 **L298N motor drivers → Pi GPIO**
-- Front driver: ENA=GPIO 12, IN1=GPIO 17, IN2=GPIO 27, ENB=GPIO 13, IN3=GPIO 22, IN4=GPIO 23
-- Rear driver:  ENA=GPIO 18, IN5=GPIO 24, IN6=GPIO 25, ENB=GPIO 19, IN7=GPIO 5,  IN8=GPIO 6
-- ENA/ENB are hardware PWM-capable pins; `RPi.GPIO.PWM` drives them at 1 kHz
+- Front driver: ENA=GPIO 12, IN1=GPIO 23, IN2=GPIO 22, ENB=GPIO 13, IN3=GPIO 27, IN4=GPIO 17
+- Rear driver:  ENA=GPIO 18, IN5=GPIO 6,  IN6=GPIO 5,  ENB=GPIO 19, IN7=GPIO 24, IN8=GPIO 25
+- ENA/ENB are hardware PWM-capable pins; `RPi.GPIO.PWM` drives them at 5 kHz (software PWM)
 
 **Pi Camera v2 → CSI connector**
 - Standard 15-pin flat cable into the Pi's CSI-2 port
 - Ensure the cable is seated with the blue tab facing the USB ports
-
-> **Note:** `car_node.py` exists in this directory but was never used in production. It is a ROS-style node wrapper written during an earlier architecture iteration. Ignore it.

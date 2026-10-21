@@ -1,5 +1,7 @@
 # Autonomous Car: Spinning & SLAM Recovery Protocol
 
+> **Historical test log.** The values below (30% spin speed, stop at ~84°, 3 s settle, 0.15 m drift check, reverse fallback) come from the `spin_debug.py` experiments. The production navigator is `navigation/navigator.py`, not `path_finding.py`, and it uses different values: `SPIN_SPEED = 40`, `SPIN_TOLERANCE = 5` (degrees), `POST_SPIN_HOLD_SECS = 1.0` + `POST_SPIN_SLAM_WAIT = 0.5`. See [`navigation/README.md`](../navigation/README.md) for the current behaviour.
+
 This document outlines the testing, findings, and final protocol for handling 90-degree rotations in the autonomous car's navigation framework. It is intended to be used as a reference to upgrade the main pathfinding scripts.
 
 ## 1. The Problem

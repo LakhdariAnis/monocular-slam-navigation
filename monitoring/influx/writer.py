@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 import time
 
 import paho.mqtt.client as mqtt
@@ -9,7 +11,7 @@ BROKER_HOST  = "localhost"
 BROKER_PORT  = 1883
 
 INFLUX_URL    = "http://localhost:8086"
-INFLUX_TOKEN  = "super-token-123"
+INFLUX_TOKEN = os.environ.get("INFLUXDB_TOKEN") or sys.exit("INFLUXDB_TOKEN not set: run `set -a; source monitoring/.env; set +a` first")
 INFLUX_ORG    = "car_org"
 INFLUX_BUCKET = "car_telemetry"
 

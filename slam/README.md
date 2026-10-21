@@ -23,10 +23,10 @@ Saving the map on exit (required to reuse it across sessions) caused segfaults. 
                                                               │
                                                        ZMQ:5557 (JSON poses)
                                                               ↓
-                                                       [slam_zmq.py]
-                                                              ↓
                                                        [navigator.py]
 ```
+
+`slam_reader` (built with `-DWITH_ZMQ=ON`) and `slam_zmq.py` both bind `tcp://*:5557`, so only one of them can publish poses at a time. Use `slam_zmq.py` when you want the `reset` flag and the ACK latch on port 5558; it launches `slam_reader` itself.
 
 ### Component Descriptions
 
@@ -55,7 +55,7 @@ Builds a fresh map from the live camera feed. Walk the car around the room and e
 | `KeyFrameTrajectory.txt` | TUM-format keyframe trajectory |
 | `room_map.osa` | Full binary ORB-SLAM3 atlas (Boost serialization) |
 
-After saving, `slam_reader` automatically invokes `map_builder.py` to compute the SLAM→room transform and write `data/stations.json`.
+After saving, `slam_reader` automatically invokes `../map_builder.py` to compute the SLAM→room transform and write `stations.json` into the same output directory as the map files (`--output-dir`, default: current directory). The navigator reads `navigation/stations.json`, so copy the result there.
 
 ### Localization mode (`--loc <atlas>`)
 
@@ -147,16 +147,6 @@ The navigator must not use poses that carry `reset: true` for navigation until i
 
 ## Build
 
-```bash
-cd slam/
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release \
-         -DWITH_ARUCO=ON \
-         -DWITH_ZMQ=ON \
-         -DWITH_POSE_INJECT=ON
-make -j4
-```
-
 ### Dependencies
 
 | Dependency | Notes |
@@ -180,9 +170,11 @@ Then build `slam_reader`:
 ```bash
 cd slam/
 mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DWITH_ARUCO=ON -DWITH_ZMQ=ON -DWITH_POSE_INJECT=ON
+cmake .. -DCMAKE_BUILD_TYPE=Release -DWITH_ARUCO=ON -DWITH_ZMQ=ON
 make -j4
 ```
+
+`CMakeLists.txt` defines two options: `WITH_ARUCO` (default `ON`) and `WITH_ZMQ` (default `OFF`). `slam_reader.cc` also guards the ArUco pose-injection call with `#ifdef WITH_POSE_INJECT`, but `CMakeLists.txt` never defines that symbol, so passing `-DWITH_POSE_INJECT=ON` to CMake has no effect and the injection path is compiled out. To enable it, add `target_compile_definitions(slam_reader PRIVATE WITH_POSE_INJECT)` to `CMakeLists.txt`.
 
 ---
 
@@ -204,7 +196,7 @@ make -j4
 3. Snaps each transformed marker position to its assigned wall and computes a 20 cm inset approach point.
 4. Filters the SLAM point cloud (Y-band, outlier removal, obstacle-height band, path proximity) and rasterizes it into a `.pgm` occupancy grid costmap.
 5. Writes:
-   - `data/stations.json` — approach point per marker in room cm
+   - `<out>/stations.json` — approach point per marker in room cm
    - `data/map_final.png` — visualization with room outline, markers, and approach circles
    - `data/map.pgm` / `data/map.yaml` — ROS-compatible occupancy costmap
 

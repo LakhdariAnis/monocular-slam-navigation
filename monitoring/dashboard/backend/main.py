@@ -5,6 +5,7 @@ import collections
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -23,7 +24,7 @@ MQTT_BROKER_HOST = "localhost"
 MQTT_BROKER_PORT = 1883
 
 INFLUX_URL    = "http://localhost:8086"
-INFLUX_TOKEN  = "super-token-123"
+INFLUX_TOKEN = os.environ.get("INFLUXDB_TOKEN") or sys.exit("INFLUXDB_TOKEN not set: run `set -a; source monitoring/.env; set +a` first")
 INFLUX_ORG    = "car_org"
 INFLUX_BUCKET = "car_telemetry"
 

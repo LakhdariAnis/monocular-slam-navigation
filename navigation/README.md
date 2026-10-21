@@ -28,7 +28,7 @@ Open **http://localhost:8080**. Pick any station from the grid, click **GO**. Th
 | `tcp://YOUR_PI_IP:5555` | Pi → PC | `camera_zmq.py` | `bridge.py`, `color_detect.py` | JPEG frames |
 | `tcp://YOUR_PI_IP:5556` | Pi → PC | `imu_zmq.py` | `navigator.py` | JSON: `heading_deg`, `moving` |
 | `tcp://localhost:5557` | PC → PC | `slam_reader` (C++) | `navigator.py` | JSON: `x`, `z`, `seq`, `ok` |
-| `http://YOUR_PI_IP:5000/drive` | PC → Pi | `navigator.py` | `car_server.py` | JSON: `{w,a,s,d,total,inner}` |
+| `http://YOUR_PI_IP:5000/drive` | PC → Pi | `navigator.py` | `car.py` (Flask) | JSON: `{w,a,s,d,total,inner}` |
 
 All ZMQ subscribers use `CONFLATE=1` — only the latest message is kept per socket, preventing queue backlog under SLAM latency spikes.
 
@@ -91,7 +91,7 @@ When `lateral < 0.03 m` and the target is ahead, the elbow is skipped entirely a
 
 The Pi Camera v2 produces motion blur at normal motor speeds. ORB feature matching fails on blurred frames — SLAM pose goes `null` mid-spin and the car drives blind.
 
-**Solution:** `SPIN_SPEED = 40` (40% PWM duty cycle). This is deliberately slower than a human would expect; hardware testing (documented in `docs/SPIN_PROTOCOL.md`) showed that 30–40% power keeps features trackable on the Pi Camera v2 stream. Higher speeds (60%+) caused ORB-SLAM3 to lose tracking and teleport the car 0.5 m+ in the map.
+**Solution:** `SPIN_SPEED = 40` (sent as `total` = 40% PWM duty cycle; see the note in [`pi/README.md`](../pi/README.md) — the committed `car.py` ignores `total`). This is deliberately slower than a human would expect; hardware testing (documented in `docs/SPIN_PROTOCOL.md`) showed that 30–40% power keeps features trackable on the Pi Camera v2 stream. Higher speeds (60%+) caused ORB-SLAM3 to lose tracking and teleport the car 0.5 m+ in the map.
 
 After every spin, the navigator enforces two mandatory holds before trusting any new SLAM reading:
 
@@ -149,15 +149,9 @@ if _mode == "real" and in_approach and pose == last_pose:
 
 The MPU-6050 heading is computed by integrating gyroscope angular velocity. Integration means every sample of sensor noise accumulates monotonically — heading drifts over time without a correction signal.
 
-**Solution:** complementary filter in `pi/imu_zmq.py`. The filter blends gyro-integrated heading with accelerometer-derived tilt at a mixing constant:
+**Solution:** gyro integration with ZUPT in `pi/imu_zmq.py`. A complementary filter (`ALPHA = 0.98`, 98% gyro / 2% accelerometer) was the intended design, and the constant is defined, but it is not used in the heading update (see note below). `test_imu_live.py` (real-time drift visualisation) and `test_imu_nav.py` (end-to-end spin accuracy) showed that drift over the typical 2–4 second spin durations used by the navigator stays well within `SPIN_TOLERANCE = 5°`.
 
-```python
-ALPHA = 0.98
-```
-
-`ALPHA = 0.98` means 98% gyro (fast, low-noise response) and 2% accelerometer correction (slow drift correction). This was tuned using `test_imu_live.py` for real-time drift visualisation and `test_imu_nav.py` for end-to-end spin accuracy — both scripts confirmed that drift over the typical 2–4 second spin durations used by the navigator stays well within `SPIN_TOLERANCE = 5°`.
-
-> **Note:** In `imu_zmq.py` the complementary filter is written as pure gyro integration (`heading_deg = heading_deg + gz * dt`) with no explicit accelerometer term visible in the final code. ZUPT (Zero-velocity Update) via accelerometer variance detection is used to freeze heading integration when stationary, which prevents drift accumulation during stops. The `ALPHA = 0.98` constant is present and defines the intended filter ratio for the heading update step.
+> **Note:** In `imu_zmq.py` the heading is pure gyro integration (`heading_deg = heading_deg + gz * dt`) with no accelerometer term. ZUPT (Zero-velocity Update) via accelerometer variance detection freezes heading integration when stationary, which prevents drift accumulation during stops. `ALPHA = 0.98` is defined but unused.
 
 ---
 
@@ -256,7 +250,7 @@ Isolated spin test harness used to tune `SPIN_SPEED` and `POST_SPIN_HOLD_SECS` w
 
 ```
 navigator.py          Unified navigator — --mode test (mock) / --mode real (hardware)
-web/server.py         FastAPI backend, 7 endpoints: /, /state, /stations, /map_hull,
+web/server.py         FastAPI backend, 8 endpoints: /, /state, /stations, /map_hull,
                       /calibration, /calibrate, /go, /stop
 web/index.html        Dark-theme canvas dashboard: live map, phase tracker, calibration tab
 stations.json         Calibrated station positions in SLAM coordinates (metres),
