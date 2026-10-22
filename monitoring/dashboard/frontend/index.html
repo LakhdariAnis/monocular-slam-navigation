@@ -1,17 +1,16 @@
 <!DOCTYPE html>
-<html class="dark" lang="en">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AeroMonitor v4.0 — Autonomous Dashboard</title>
+  <title>Monitoring — Autonomous Car</title>
   <meta name="description" content="Real-time autonomous navigation monitoring dashboard with SLAM, IMU, and motor telemetry" />
 
   <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- Google Fonts -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet" />
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
 
   <!-- React 18 -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -23,153 +22,35 @@
   <!-- Recharts -->
   <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
 
-  <!-- Tailwind config -->
-  <script>
-    tailwind.config = {
-      darkMode: "class",
-      theme: {
-        extend: {
-          colors: {
-            "tertiary-fixed-dim": "#c8a0f0",
-            "surface-variant": "#1a2438",
-            tertiary: "#c8a0f0",
-            surface: "#0f1524",
-            "inverse-primary": "#0a4c6e",
-            "on-surface": "#e0e8f0",
-            "error-container": "#3d1414",
-            "on-error": "#1a0000",
-            "on-secondary-fixed": "#0d1f2b",
-            "on-tertiary-fixed": "#1a002e",
-            "surface-container-high": "#1a2438",
-            "tertiary-container": "#3d2060",
-            "surface-dim": "#0f1524",
-            "primary-fixed-dim": "#7dd3fc",
-            "outline-variant": "#2a3a48",
-            "secondary-container": "#1a3a4e",
-            error: "#ff6b6b",
-            primary: "#7dd3fc",
-            "on-secondary-fixed-variant": "#2a4a5e",
-            "on-primary-fixed-variant": "#004d73",
-            "inverse-surface": "#e0e8f0",
-            "on-primary-fixed": "#001f2e",
-            "primary-fixed": "#c8eaff",
-            "surface-tint": "#7dd3fc",
-            "surface-container-lowest": "#0a0e1a",
-            "on-tertiary-fixed-variant": "#4d2a73",
-            "on-error-container": "#ffb3b3",
-            "surface-container-highest": "#202c42",
-            outline: "#4a6070",
-            "surface-container-low": "#111828",
-            "on-secondary-container": "#c0d8e8",
-            background: "#0a0e1a",
-            "on-tertiary": "#1a002e",
-            "on-background": "#e0e8f0",
-            "secondary-fixed-dim": "#88b4cc",
-            "on-tertiary-container": "#e8d0ff",
-            "on-primary-container": "#c8eaff",
-            "primary-container": "#0e4d6e",
-            "on-secondary": "#001f2e",
-            "on-primary": "#001f2e",
-            "surface-container": "#141c2e",
-            "surface-bright": "#1a2438",
-            secondary: "#88b4cc",
-            "on-surface-variant": "#a0b4c4",
-            "inverse-on-surface": "#0a0e1a",
-            "tertiary-fixed": "#e8d0ff",
-            "secondary-fixed": "#c0d8e8",
-          },
-          borderRadius: {
-            DEFAULT: "0.5rem",
-            lg: "1rem",
-            xl: "1.5rem",
-            full: "9999px",
-          },
-          spacing: {
-            gutter: "1.5rem",
-            "panel-gap": "1rem",
-          },
-          fontFamily: {
-            headline: ["Inter"],
-            display: ["Inter"],
-            body: ["Inter"],
-            label: ["Inter"],
-          },
-        },
-      },
-    };
-  </script>
-
   <style>
-    body { background-color: #0a0e1a; color: #e0e8f0; }
-    .glass-panel {
-      background: rgba(15, 21, 36, 0.6);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(125, 211, 252, 0.1);
+    :root {
+      --bg: #f4f5f7; --card: #fff; --text: #0f172a; --dim: #64748b; --line: #e5e7eb;
+      --ind: #4f46e5; --grn: #10b981; --amb: #f59e0b; --red: #ef4444;
     }
-    .glass-panel-elevated {
-      background: rgba(15, 21, 36, 0.75);
-      backdrop-filter: blur(24px);
-      -webkit-backdrop-filter: blur(24px);
-      border: 1px solid rgba(125, 211, 252, 0.15);
-    }
-    .glow-text-primary { text-shadow: 0 0 10px rgba(125, 211, 252, 0.5); }
-    .glow-border-primary { box-shadow: 0 0 15px rgba(125, 211, 252, 0.3); }
+    body { background: var(--bg); color: var(--text); font-family: Manrope, system-ui, sans-serif; margin: 0; }
+    .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+    .card { background: var(--card); border-radius: 16px; box-shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 20px rgba(16,24,40,.05); }
+    .k { font-size: 12px; font-weight: 600; color: var(--dim); }
+    .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-size: 16px; flex: none; }
 
-    /* Custom scrollbar */
+    /* segmented control (station buttons) */
+    .seg { display: inline-flex; background: #eef0f4; border-radius: 10px; padding: 3px; gap: 2px; }
+    .seg button { font: 600 13px Manrope, sans-serif; padding: 5px 12px; border-radius: 8px; color: var(--dim); }
+    .seg button:hover { color: var(--text); }
+    .seg button.on { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(16,24,40,.12); }
+
+    /* toggle switch */
+    .tg { width: 38px; height: 22px; border-radius: 11px; background: #e2e8f0; position: relative; flex: none; display: block; transition: background .2s; }
+    .tg::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: left .2s; }
+    .tg.on { background: var(--red); }
+    .tg.on::after { left: 18px; }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--ind); outline-offset: 2px; }
+
     ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.02); }
-    ::-webkit-scrollbar-thumb { background: rgba(125, 211, 252, 0.2); border-radius: 10px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(125, 211, 252, 0.4); }
-
-    /* Pulse animation for WS indicator */
-    @keyframes pulse-glow {
-      0%, 100% { box-shadow: 0 0 4px currentColor; opacity: 1; }
-      50% { box-shadow: 0 0 12px currentColor; opacity: 0.7; }
-    }
-    .pulse-green {
-      animation: pulse-glow 2s ease-in-out infinite;
-      color: #22c55e;
-    }
-
-    /* Recharts overrides */
-    .recharts-cartesian-grid-horizontal line,
-    .recharts-cartesian-grid-vertical line {
-      stroke: rgba(125, 211, 252, 0.06) !important;
-    }
-    .recharts-text { fill: #a0b4c4 !important; font-size: 10px !important; }
-
-    /* Toggle switch */
-    .toggle-track {
-      width: 36px; height: 20px; border-radius: 10px;
-      background: #1a2438; position: relative; cursor: pointer;
-      transition: background 0.3s, box-shadow 0.3s;
-      border: 1px solid rgba(125, 211, 252, 0.1);
-    }
-    .toggle-track.active {
-      background: rgba(125, 211, 252, 0.3);
-      box-shadow: 0 0 12px rgba(125, 211, 252, 0.4);
-      border-color: rgba(125, 211, 252, 0.4);
-    }
-    .toggle-thumb {
-      width: 16px; height: 16px; border-radius: 50%;
-      background: #a0b4c4; position: absolute; top: 2px; left: 2px;
-      transition: transform 0.3s, background 0.3s;
-    }
-    .toggle-track.active .toggle-thumb {
-      transform: translateX(16px);
-      background: #7dd3fc;
-    }
-
-    /* Chart grid background */
-    .chart-grid-bg {
-      background-image: linear-gradient(rgba(125, 211, 252, 0.05) 1px, transparent 1px),
-                         linear-gradient(90deg, rgba(125, 211, 252, 0.05) 1px, transparent 1px);
-      background-size: 50px 50px;
-    }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
   </style>
 </head>
-<body class="min-h-screen flex flex-col font-body text-base overflow-x-hidden">
+<body>
   <div id="root"></div>
 
   <script src="App.js"></script>
