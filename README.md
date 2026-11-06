@@ -33,7 +33,7 @@ The car was built and tested on real hardware. It is no longer available, so the
   - ArUco marker detection and PnP pose for relocalization;
   - a fix for a crash when saving the atlas (`Map::PreSave` erased elements while iterating);
   - a fix so relocalization works after loading a saved atlas (`KeyFrameDatabase::DetectRelocalizationCandidates`).
-- The web dashboard (FastAPI) and a telemetry stack with MQTT, InfluxDB and a rule-based anomaly detector, tested on a simulator (`monitoring/`).
+- The web dashboard (FastAPI). The telemetry stack moved to [robot-telemetry-monitoring](https://github.com/LakhdariAnis/robot-telemetry-monitoring).
 
 **Reused:**
 - [ORB-SLAM3](https://github.com/UZ-SLAMLab/ORB_SLAM3) (GPLv3), included as a Git submodule.
@@ -98,9 +98,9 @@ Open http://localhost:8080, pick a station and click **GO**. The dashboard anima
 2. On the PC, copy my changed files over the submodule (`cp -r slam/orbslam3/* ORB_SLAM3/`), build ORB-SLAM3 and `slam_reader` (see [`slam/README.md`](slam/README.md)), then run it in localization mode: `./slam_reader ORBvoc.txt picam.yaml --loc room_map`.
 3. Start the navigator in real mode and pick a station from the dashboard.
 
-## Monitoring (simulator only)
+## Monitoring
 
-[`monitoring/`](monitoring/README.md) holds a telemetry stack: Mosquitto (MQTT) and InfluxDB 2 in Docker, an MQTT-to-InfluxDB writer, a rule-based anomaly detector (tracking loss, motor stall, IMU drift, low SLAM rate) and a FastAPI + React dashboard. It is fed by a car simulator with injectable faults. It was never connected to the real car.
+The telemetry and anomaly-detection stack I built for this car (MQTT, InfluxDB, a rule-based detector and a live dashboard) now lives in its own repo: [robot-telemetry-monitoring](https://github.com/LakhdariAnis/robot-telemetry-monitoring). It was tested on a car simulator and never connected to the real car.
 
 ## Repository structure
 
@@ -108,7 +108,6 @@ Open http://localhost:8080, pick a station and click **GO**. The dashboard anima
 navigation/   L-path navigator, web dashboard, calibration tools, stations.json
 slam/         slam_reader (C++), shared-memory bridge, map builder, my ORB-SLAM3 changes (patch + files)
 pi/           Motor controller (Flask/GPIO), IMU publisher, camera streamer
-monitoring/   MQTT + InfluxDB telemetry, anomaly detector, dashboard (simulator-fed)
 data/         Calibration, map points, marker positions, camera settings
 docs/         Spin protocol, project report, demo media
 ORB_SLAM3/    Upstream ORB-SLAM3 (Git submodule)
@@ -120,7 +119,6 @@ ORB_SLAM3/    Upstream ORB-SLAM3 (Git submodule)
 - There are no measured accuracy numbers (position error, success rate). The demos show working runs only.
 - SLAM ran on a PC, not on the Pi.
 - A complementary filter (`ALPHA = 0.98`) is defined in `pi/imu_zmq.py` but not used in the heading update.
-- The monitoring stack runs on simulated data only.
 
 ## Context
 

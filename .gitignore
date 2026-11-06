@@ -56,3 +56,6 @@ monitoring/dashboard/frontend/build/
 .env
 .env.local
 .env.*.local
+
+# moved to github.com/LakhdariAnis/robot-telemetry-monitoring (local copy kept)
+monitoring/
