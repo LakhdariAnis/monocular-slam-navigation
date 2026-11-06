@@ -1,26 +1,87 @@
-# Autonomous RC Car — Monocular SLAM Navigation
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/banner-dark.svg">
+  <img src="docs/media/banner-light.svg" width="100%" alt="Monocular SLAM navigation: autonomous RC car with ORB-SLAM3 and an IMU on a Raspberry Pi 3B.">
+</picture>
 
-> Indoor autonomous navigation using only a camera and IMU on a Raspberry Pi 3B.
+# Monocular SLAM Navigation
 
----
-
-## Demo
+An indoor autonomous RC car that drove between calibrated stations using only one camera and an IMU, with no lidar, wheel encoders or depth sensor. Raspberry Pi 3B on the car, ORB-SLAM3 on a PC, and my own C++ changes to ORB-SLAM3 for ArUco relocalization.
 
 <table>
 <tr>
-<td><img src="docs/media/demo_navigation.gif" width="400"/><br/>
-<sub>Real-world navigation to Station 1 (3× speed — pauses are due to the low feature count in the room)</sub></td>
-<td><img src="docs/media/demo_dashboard.gif" width="400"/><br/>
-<sub>Real-world navigation to Station 1, good room lighting and features</sub></td>
+<td><img src="docs/media/demo_navigation.gif" width="400" alt="The car driving to Station 1"/><br/>
+<sub>Real run to Station 1 (3× speed). The pauses come from the low number of visual features in the room.</sub></td>
+<td><img src="docs/media/demo_dashboard.gif" width="400" alt="Dashboard during a run"/><br/>
+<sub>Real run to Station 1 in good lighting, shown on the web dashboard.</sub></td>
 </tr>
 </table>
 
-<img src="docs/media/demo_cli.gif" width="500"/><br/>
-<sub>Terminal trigger → car departs autonomously</sub>
+## Overview
 
----
+The goal was indoor navigation with the cheapest possible sensors: a Pi Camera v2 and an MPU-6050. The Raspberry Pi 3B streamed camera frames and IMU heading to a PC over ZeroMQ. The PC ran ORB-SLAM3 for position, planned an L-shaped path to the chosen station, and sent motor commands back to the Pi over HTTP. When SLAM lost tracking on plain walls, wall-mounted ArUco markers gave the car its absolute pose again.
 
-## Run the Demo (no hardware required)
+The car was built and tested on real hardware. It is no longer available, so the repo now also has a test mode that runs the navigator and dashboard without any hardware.
+
+## What I built vs reused
+
+**Built (solo):**
+- The full navigation stack: L-path planner, stall detection, post-spin SLAM settle logic, and station calibration tools (`navigation/`).
+- The Pi services: motor controller, IMU publisher with zero-velocity update, camera streamer (`pi/`).
+- The ZeroMQ pipeline between Pi and PC, and the POSIX shared-memory bridge into the SLAM process (`slam/bridge.py`, `slam/slam_reader.cc`).
+- Changes to ORB-SLAM3 in C++. Read them in [`slam/orbslam3.patch`](slam/orbslam3.patch); the reasons are in [`slam/CHANGES.md`](slam/CHANGES.md):
+  - a new `System::InjectPoseHint(const Sophus::SE3f& Tcw)` API that restarts tracking from a known pose;
+  - ArUco marker detection and PnP pose for relocalization;
+  - a fix for a crash when saving the atlas (`Map::PreSave` erased elements while iterating);
+  - a fix so relocalization works after loading a saved atlas (`KeyFrameDatabase::DetectRelocalizationCandidates`).
+- The web dashboard (FastAPI) and a telemetry stack with MQTT, InfluxDB and a rule-based anomaly detector, tested on a simulator (`monitoring/`).
+
+**Reused:**
+- [ORB-SLAM3](https://github.com/UZ-SLAMLab/ORB_SLAM3) (GPLv3), included as a Git submodule.
+- OpenCV (ArUco module), ZeroMQ, FastAPI, Flask, NumPy, SciPy.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Pi["Raspberry Pi 3B, on the car"]
+    CAM["Pi Camera v2<br/>camera_zmq.py"]
+    IMU["MPU-6050<br/>imu_zmq.py"]
+    CAR["car.py<br/>Flask + GPIO"] --> MOT["2× L298N<br/>4× TT motors"]
+  end
+  subgraph PC["PC"]
+    BR["bridge.py"] -->|POSIX shm| SR["slam_reader<br/>ORB-SLAM3 + ArUco"]
+    SR -->|"ZMQ :5557 pose"| NAV["navigator.py<br/>L-path planner"]
+    WEB["Web dashboard<br/>FastAPI"] --> NAV
+  end
+  CAM -->|"ZMQ :5555 JPEG"| BR
+  IMU -->|"ZMQ :5556 heading"| NAV
+  NAV -->|"HTTP :5000 /drive"| CAR
+```
+
+SLAM ran on the PC because ORB-SLAM3 needs about 800 MB of RAM at runtime and the Pi 3B has 1 GB. All ZeroMQ subscribers use `CONFLATE=1`, so only the newest message is kept and queues never build up when SLAM slows down.
+
+## Hardware
+
+| Component | Role |
+|---|---|
+| Raspberry Pi 3B (1 GB RAM) | Sensor streaming and motor control |
+| Pi Camera v2 (640×480, JPEG quality 80) | The only position sensor, through SLAM |
+| MPU-6050 IMU (I²C, 50 Hz) | Heading during spins |
+| 2× L298N H-bridge, 4× TT motors | Drive |
+| ArUco markers (DICT_4X4_50, 18.4 cm), printed and wall-mounted | Absolute pose when SLAM is lost |
+| PC | Runs ORB-SLAM3 and the navigator |
+
+## Engineering problems I solved
+
+- **SLAM lost tracking while spinning.** Motion blur at higher motor power made ORB-SLAM3 lose tracking. In tuning, 60% PWM made the pose jump by 0.5 m or more. The navigator spins at 40% PWM (`SPIN_SPEED = 40`). See [`docs/SPIN_PROTOCOL.md`](docs/SPIN_PROTOCOL.md).
+- **Stale poses after a spin.** Every spin is followed by two fixed holds (`POST_SPIN_HOLD_SECS = 1.0`, `POST_SPIN_SLAM_WAIT = 0.5`) so SLAM can pick up features again before the car trusts its position.
+- **Silent motor stalls on carpet.** A sliding window on the SLAM position (less than 2 mm progress per step) detects no movement. After 80 zero-progress steps (about 8 s) the car reverses and retries.
+- **Slow relocalization on plain walls.** Upstream relocalization can take seconds or fail. ArUco PnP gives the camera pose, and `InjectPoseHint` restarts tracking from it.
+- **IMU drift.** Heading is gyro-integrated, with a zero-velocity update that freezes integration when the car is still. Spins never last more than 5 s, which keeps drift small.
+
+## Getting started
+
+### Test mode (no hardware)
 
 ```bash
 git clone https://github.com/LakhdariAnis/monocular-slam-navigation.git
@@ -29,123 +90,44 @@ pip install fastapi uvicorn pyzmq scipy numpy opencv-python requests
 python3 -m navigation.web.server --mode test
 ```
 
-Open **http://localhost:8080** — pick any station from the grid and click **GO**. The dashboard animates the full L-path, tracks mock position in real time, and updates the navigation phase indicator. No Pi, no SLAM, no camera required.
+Open http://localhost:8080, pick a station and click **GO**. The dashboard animates the L-path and the mock position.
 
----
+### Real hardware (for reference)
 
-## What It Does
+1. On the Pi, start the three services (see [`pi/README.md`](pi/README.md)): `python3 car.py`, `python3 imu_zmq.py`, `python3 camera_zmq.py`.
+2. On the PC, copy my changed files over the submodule (`cp -r slam/orbslam3/* ORB_SLAM3/`), build ORB-SLAM3 and `slam_reader` (see [`slam/README.md`](slam/README.md)), then run it in localization mode: `./slam_reader ORBvoc.txt picam.yaml --loc room_map`.
+3. Start the navigator in real mode and pick a station from the dashboard.
 
-The car navigates between calibrated stations in an indoor room using:
+## Monitoring (simulator only)
 
-- **Monocular V-SLAM** (ORB-SLAM3) for position — no lidar, no encoders, no depth sensor
-- **MPU-6050 IMU** gyro-integrated heading with ZUPT for spins
-- **L-path planning** for reliable, repeatable perpendicular wall approach
-- **ZMQ pub/sub pipeline** connecting Pi hardware to PC navigation compute
+[`monitoring/`](monitoring/README.md) holds a telemetry stack: Mosquitto (MQTT) and InfluxDB 2 in Docker, an MQTT-to-InfluxDB writer, a rule-based anomaly detector (tracking loss, motor stall, IMU drift, low SLAM rate) and a FastAPI + React dashboard. It is fed by a car simulator with injectable faults. It was never connected to the real car.
 
-SLAM runs on a PC — the Pi 3B at 1 GB RAM cannot run ORB-SLAM3 in real time (it requires ~800 MB at runtime; co-locating it would cause OOM kills or SD card thrash). All sensor data streams over WiFi via ZMQ. Motor commands return over HTTP.
-
----
-
-## Key Engineering Decisions
-
-These are the problems that took the most time to solve:
-
-- **Slow spin speed** — Pi Cam v2 produces motion blur at normal speeds. ORB features fail on blurred frames and SLAM pose goes null mid-spin. Running at **40% PWM** (`SPIN_SPEED = 40`) keeps SLAM stable through rotation (note: the committed `pi/car.py` ignores the `total` speed field, see [Pi Layer](pi/README.md)). At 60%+ PWM, ORB-SLAM3 lost tracking and teleported the pose 0.5 m+ in the map.
-
-- **Post-spin SLAM settle** — after spinning, SLAM needs time to reacquire stationary features before poses are trustworthy. Two mandatory holds are enforced unconditionally after every spin: `POST_SPIN_HOLD_SECS = 1.0 s` (motor-stop rollback prevention) and `POST_SPIN_SLAM_WAIT = 0.5 s` (feature reacquisition). Skipping either causes the car to drive on a stale pose.
-
-- **Stall detection** — TT motors stall silently on carpet below ~40% PWM. A sliding-window check on SLAM position (`< 2 mm` progress per step) detects no-movement; after 80 consecutive zero-progress steps (~8 s) a reverse-and-retry is triggered automatically.
-
-- **ArUco relocalization** — when SLAM loses tracking in feature-poor rooms, ArUco markers (DICT_4X4_50, printed and wall-mounted) give absolute pose in under one frame via a custom `InjectPoseHint(Tcw)` C++ API added to ORB-SLAM3. This was necessary because upstream BoW-based relocalization can take several seconds or fail entirely on plain painted walls.
-
-- **IMU drift** — heading is gyro-integrated; drift stays acceptable for spin durations under 5 seconds (the longest the navigator ever commands). ZUPT (Zero-velocity UPdaTe) via accelerometer variance detection freezes integration when stationary, preventing drift accumulation during SLAM-processing pauses. A complementary filter (`ALPHA = 0.98`) is defined in `imu_zmq.py` but not wired into the heading update.
-
----
-
-## Architecture
+## Repository structure
 
 ```
-[Pi Cam v2] ──ZMQ:5555──→ [bridge.py] ──POSIX shm──→ [slam_reader C++]
-                                                              │
-[MPU-6050]  ──ZMQ:5556────────────────────────────→ [navigator.py]  ←── ZMQ:5557
-                                                              │
-[4× TT motors via L298N] ←────────────────────── HTTP:5000 ──┘
+navigation/   L-path navigator, web dashboard, calibration tools, stations.json
+slam/         slam_reader (C++), shared-memory bridge, map builder, my ORB-SLAM3 changes (patch + files)
+pi/           Motor controller (Flask/GPIO), IMU publisher, camera streamer
+monitoring/   MQTT + InfluxDB telemetry, anomaly detector, dashboard (simulator-fed)
+data/         Calibration, map points, marker positions, camera settings
+docs/         Spin protocol, project report, demo media
+ORB_SLAM3/    Upstream ORB-SLAM3 (Git submodule)
 ```
 
-| Socket | Direction | Publisher | Subscriber | Content |
-|--------|-----------|-----------|------------|---------|
-| `tcp://YOUR_PI_IP:5555` | Pi → PC | `camera_zmq.py` | `bridge.py` | JPEG frames |
-| `tcp://YOUR_PI_IP:5556` | Pi → PC | `imu_zmq.py` | `navigator.py` | JSON: `heading_deg`, `moving` |
-| `tcp://localhost:5557` | PC → PC | `slam_reader` (C++) | `navigator.py` | JSON: `x`, `z`, `seq`, `ok` |
-| `http://YOUR_PI_IP:5000/drive` | PC → Pi | `navigator.py` | `car.py` (Flask) | JSON: `{w,a,s,d,total,inner}` |
+## Limitations
 
-All ZMQ subscribers use `CONFLATE=1` — only the latest message is kept per socket, preventing queue backlog under SLAM latency spikes.
+- The car is no longer available, so the code can't be tested on hardware anymore.
+- There are no measured accuracy numbers (position error, success rate). The demos show working runs only.
+- SLAM ran on a PC, not on the Pi.
+- A complementary filter (`ALPHA = 0.98`) is defined in `pi/imu_zmq.py` but not used in the heading update.
+- The monitoring stack runs on simulated data only.
 
----
+## Context
 
-## Hardware
+Solo 2CS end-of-year project at École Supérieure en Informatique, Sidi Bel Abbès (Algeria), academic year 2025/2026. Supervised by Abdelatif Rahmoun and Hamdane Bensenane. The full report is in [`docs/`](docs/).
 
-<img src="docs/media/car_render.png" width="500"/>
+Author: Anis Charaf Eddine Lakhdari.
 
-| Component | Details |
-|-----------|---------|
-| Chassis | RC car, 4× TT motors, 2× L298N H-bridge |
-| Compute | Raspberry Pi 3B — 1 GB RAM |
-| Vision | Pi Camera v2 (640×480, JPEG @ quality 80, ZMQ:5555) |
-| IMU | MPU-6050 (I²C bus 1, addr `0x68`, 50 Hz) |
-| Localization assist | ArUco markers (DICT_4X4_50, 18.4 cm), printed and wall-mounted |
-| SLAM compute | PC (offloaded from Pi) |
+## License
 
----
-
-## Project Structure
-
-```
-navigation/    L-path navigator, web dashboard, calibration tools, stations.json
-slam/          Custom ORB-SLAM3 — ArUco relocalization, pose injection API, serialization fixes
-pi/            Motor controller (Flask/GPIO), IMU publisher, camera streamer
-monitoring/    MQTT + InfluxDB telemetry, anomaly detector, live dashboard (simulator-fed)
-data/          calibration.json, MapPoints.txt, MarkerPositions.txt, picam_runtime.yaml
-docs/          Spin protocol, project report, media (demo GIFs, renders, screenshots)
-```
-
----
-
-## Monitoring
-
-A separate telemetry stack in [`monitoring/`](monitoring/README.md):
-
-- Mosquitto (MQTT) and InfluxDB 2 run in Docker.
-- An MQTT → InfluxDB writer stores the telemetry.
-- A rule-based anomaly detector flags tracking loss, motor stall, IMU static drift and low SLAM rate.
-- A FastAPI + React dashboard on port 8000 shows live and historical data.
-
-It is currently fed by a car simulator (`monitoring/mock/simulator.py`) that has injectable faults. A ZMQ → MQTT bridge from the real car and the OPC-UA server are not implemented yet.
-
-```bash
-cd monitoring
-cp .env.example .env      # set INFLUXDB_ADMIN_PASSWORD and INFLUXDB_TOKEN
-python3 launch.py         # docker compose + simulator + writer + detector + dashboard
-```
-
-Open **http://localhost:8000**.
-
-<table>
-<tr>
-<td><img src="docs/media/monitoring_dashboard.png" width="400"/><br/>
-<sub>Live dashboard: simulated car driving to Station 1</sub></td>
-<td><img src="docs/media/monitoring_anomalies.png" width="400"/><br/>
-<sub>Motor stall injected at severity 1.0, detector raises CRIT</sub></td>
-</tr>
-</table>
-
----
-
-## Documentation
-
-- [Navigation System](navigation/README.md) — L-path algorithm, engineering problems & solutions, web dashboard, calibration tools
-- [SLAM Layer](slam/README.md) — custom ORB-SLAM3, ArUco relocalization state machine, ZMQ pose format, build instructions
-- [Pi Layer](pi/README.md) — motor GPIO map, IMU complementary filter, camera streaming, network layout
-- [ORB-SLAM3 Modifications](slam/CHANGES.md) — C++ changes vs upstream: pose injection, iterator fix, cross-map relocalization
-- [Spin Protocol](docs/SPIN_PROTOCOL.md) — SPIN_SPEED tuning methodology and hardware test results
-- [Monitoring](monitoring/README.md) — MQTT/InfluxDB telemetry, anomaly detection rules, dashboard, simulator, stress test results
+ORB-SLAM3 is licensed under GPLv3, so this project is released under GPLv3 too. Thanks to the ORB-SLAM3 authors at the University of Zaragoza.

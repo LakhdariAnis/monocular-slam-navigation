@@ -50,4 +50,6 @@ endif()
 
 if(WITH_ARUCO)
     target_compile_definitions(slam_reader PRIVATE WITH_ARUCO)
+    # ArUco pose injection (needs InjectPoseHint from slam/orbslam3/)
+    target_compile_definitions(slam_reader PRIVATE WITH_POSE_INJECT)
 endif()

@@ -1,0 +1,900 @@
+# My changes to ORB-SLAM3 (upstream commit 4452a3c, v1.0-release)
+#
+# This patch is for reading. Both sides were run through `clang-format --style=Google`
+# first, so it shows only real code changes, not formatting.
+# To build, copy the full files from slam/orbslam3/ over the ORB_SLAM3/ submodule
+# (see slam/README.md). The change log with the reasons is in slam/CHANGES.md.
+#
+--- a/ORB_SLAM3/include/System.h
++++ b/ORB_SLAM3/include/System.h
+@@ -127,8 +127,10 @@
+   // This stops local mapping thread (map building) and performs only camera
+   // tracking.
+   void ActivateLocalizationMode();
++  void ForceRelocalization(const Sophus::SE3f& Tcw);
+   // This resumes local mapping thread and performs SLAM again.
+   void DeactivateLocalizationMode();
++  bool InjectPoseHint(const Sophus::SE3f& Tcw);
+ 
+   // Returns true if there have been a big map change (loop closure, global BA)
+   // since last call to this function
+@@ -197,7 +199,11 @@
+   void InsertTrackTime(double& time);
+ #endif
+ 
++  Atlas* GetAtlas() { return mpAtlas; }
++
+  private:
++ public:
++ public:
+   void SaveAtlas(int type);
+   bool LoadAtlas(int type);
+ 
+--- a/ORB_SLAM3/src/System.cc
++++ b/ORB_SLAM3/src/System.cc
+@@ -195,7 +195,7 @@
+ 
+   // Initialize the Tracking thread
+   //(it will live in the main thread of execution, the one that called this
+-  //constructor)
++  // constructor)
+   cout << "Seq. Name: " << strSequence << endl;
+   mpTracker = new Tracking(this, mpVocabulary, mpFrameDrawer, mpMapDrawer,
+                            mpAtlas, mpKeyFrameDatabase, strSettingsFile,
+@@ -512,14 +512,29 @@
+ 
+   cout << "Shutdown" << endl;
+ 
+-  mpLocalMapper->RequestFinish();
++  // FORCE THE TRACKING ENGINE TO RELEASE MAP DATA STRUCTURES BEFORE
++  // SERIALIZATION
++  ResetActiveMap();
++
++  if (mpLocalMapper) {
++    cout << "[DBG] Requesting LocalMapper finish..." << endl;
++    mpLocalMapper->RequestFinish();
++  }
++  cout << "[DBG] Requesting LoopCloser finish..." << endl;
+   mpLoopCloser->RequestFinish();
+-  /*if(mpViewer)
+-  {
+-      mpViewer->RequestFinish();
+-      while(!mpViewer->isFinished())
+-          usleep(5000);
+-  }*/
++  cout << "[DBG] Waiting for threads to finish..." << endl;
++  while (!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished()) {
++    usleep(5000);
++  }
++  cout << "[DBG] Threads finished." << endl;
++  if (mpViewer) {
++    mpViewer->RequestFinish();
++    int viewer_wait = 0;
++    while (!mpViewer->isFinished() && viewer_wait < 5000) {
++      usleep(5000);
++      viewer_wait++;
++    }
++  }
+ 
+   // Wait until all thread have effectively stopped
+   /*while(!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished() ||
+@@ -538,9 +553,20 @@
+ }*/
+ 
+   if (!mStrSaveAtlasToFile.empty()) {
+-    Verbose::PrintMess("Atlas saving to file " + mStrSaveAtlasToFile,
+-                       Verbose::VERBOSITY_NORMAL);
++    // LocalMapper and LoopCloser are already finished — we waited above.
++    // Just kill any lingering GBA thread and save.
++    if (mpLoopCloser->isRunningGBA()) {
++      cout << "[DBG] Stopping lingering GBA..." << endl;
++      mpLoopCloser->StopGBA();
++      int gba_wait = 0;
++      while (mpLoopCloser->isRunningGBA() && gba_wait < 2000) {
++        usleep(5000);
++        gba_wait++;
++      }
++    }
++    cout << "[DBG] Calling SaveAtlas..." << endl;
+     SaveAtlas(FileType::BINARY_FILE);
++    cout << "[DBG] SaveAtlas returned." << endl;
+   }
+ 
+   /*if(mpViewer)
+@@ -1410,9 +1436,19 @@
+     // Save the current session
+     mpAtlas->PreSave();
+ 
+-    string pathSaveFileName = "./";
++    string pathSaveFileName = "";
++    if (mStrSaveAtlasToFile.front() != '/' &&
++        mStrSaveAtlasToFile.find("./") != 0) {
++      pathSaveFileName = "./";
++    }
+     pathSaveFileName = pathSaveFileName.append(mStrSaveAtlasToFile);
+-    pathSaveFileName = pathSaveFileName.append(".osa");
++    if (pathSaveFileName.substr(pathSaveFileName.find_last_of(".") + 1) !=
++        "osa") {
++      pathSaveFileName = pathSaveFileName.append(".osa");
++    }
++
++    Verbose::PrintMess("System::SaveAtlas: Saving Atlas to " + pathSaveFileName,
++                       Verbose::VERBOSITY_NORMAL);
+ 
+     string strVocabularyChecksum =
+         CalculateCheckSum(mStrVocabularyFilePath, TEXT_FILE);
+@@ -1421,7 +1457,8 @@
+ 
+     if (type == TEXT_FILE)  // File text
+     {
+-      cout << "Starting to write the save text file " << endl;
++      cout << "Starting to write the save text file: " << pathSaveFileName
++           << endl;
+       std::remove(pathSaveFileName.c_str());
+       std::ofstream ofs(pathSaveFileName, std::ios::binary);
+       boost::archive::text_oarchive oa(ofs);
+@@ -1432,9 +1469,15 @@
+       cout << "End to write the save text file" << endl;
+     } else if (type == BINARY_FILE)  // File binary
+     {
+-      cout << "Starting to write the save binary file" << endl;
++      cout << "Starting to write the save binary file: " << pathSaveFileName
++           << endl;
+       std::remove(pathSaveFileName.c_str());
+       std::ofstream ofs(pathSaveFileName, std::ios::binary);
++      if (!ofs.is_open()) {
++        cerr << "ERROR: Cannot open " << pathSaveFileName << " for writing!"
++             << endl;
++        return;
++      }
+       boost::archive::binary_oarchive oa(ofs);
+       oa << strVocabularyName;
+       oa << strVocabularyChecksum;
+@@ -1448,9 +1491,20 @@
+   string strFileVoc, strVocChecksum;
+   bool isRead = false;
+ 
+-  string pathLoadFileName = "./";
++  string pathLoadFileName = "";
++  if (mStrLoadAtlasFromFile.front() != '/' &&
++      mStrLoadAtlasFromFile.find("./") != 0) {
++    pathLoadFileName = "./";
++  }
+   pathLoadFileName = pathLoadFileName.append(mStrLoadAtlasFromFile);
+-  pathLoadFileName = pathLoadFileName.append(".osa");
++  if (pathLoadFileName.substr(pathLoadFileName.find_last_of(".") + 1) !=
++      "osa") {
++    pathLoadFileName = pathLoadFileName.append(".osa");
++  }
++
++  Verbose::PrintMess(
++      "System::LoadAtlas: Loading Atlas from " + pathLoadFileName,
++      Verbose::VERBOSITY_NORMAL);
+ 
+   if (type == TEXT_FILE)  // File text
+   {
+@@ -1541,4 +1595,13 @@
+   return checksum;
+ }
+ 
++bool System::InjectPoseHint(const Sophus::SE3f& Tcw) {
++  if (!mpTracker) return false;
++  int state = mpTracker->mState;
++  if (state != Tracking::RECENTLY_LOST && state != Tracking::LOST) return false;
++  mpTracker->mLastFrame.SetPose(Tcw);
++  mpTracker->mState = Tracking::OK;
++  return true;
++}
++
+ }  // namespace ORB_SLAM3
+--- a/ORB_SLAM3/src/Tracking.cc
++++ b/ORB_SLAM3/src/Tracking.cc
+@@ -1767,7 +1767,14 @@
+     mCurrentFrame.SetNewBias(mpLastKeyFrame->GetImuBias());
+ 
+   if (mState == NO_IMAGES_YET) {
+-    mState = NOT_INITIALIZED;
++    if (mbOnlyTracking) {
++      cout << "[DEBUG] Loc mode active: Setting initial state to LOST to force "
++              "Relocalization"
++           << endl;
++      mState = LOST;
++    } else {
++      mState = NOT_INITIALIZED;
++    }
+   }
+ 
+   mLastProcessedState = mState;
+@@ -2149,23 +2156,25 @@
+ 
+     // Reset if the camera get lost soon after initialization
+     if (mState == LOST) {
+-      if (pCurrentMap->KeyFramesInMap() <= 10) {
+-        mpSystem->ResetActiveMap();
+-        return;
+-      }
+-      if (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO ||
+-          mSensor == System::IMU_RGBD)
+-        if (!pCurrentMap->isImuInitialized()) {
+-          Verbose::PrintMess(
+-              "Track lost before IMU initialisation, reseting...",
+-              Verbose::VERBOSITY_QUIET);
++      if (!mbOnlyTracking) {
++        if (pCurrentMap->KeyFramesInMap() <= 10) {
+           mpSystem->ResetActiveMap();
+           return;
+         }
++        if (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO ||
++            mSensor == System::IMU_RGBD)
++          if (!pCurrentMap->isImuInitialized()) {
++            Verbose::PrintMess(
++                "Track lost before IMU initialisation, reseting...",
++                Verbose::VERBOSITY_QUIET);
++            mpSystem->ResetActiveMap();
++            return;
++          }
+ 
+-      CreateMapInAtlas();
++        CreateMapInAtlas();
+ 
+-      return;
++        return;
++      }
+     }
+ 
+     if (!mCurrentFrame.mpReferenceKF)
+@@ -2582,7 +2591,7 @@
+   int nmatches =
+       matcher.SearchByBoW(mpReferenceKF, mCurrentFrame, vpMapPointMatches);
+ 
+-  if (nmatches < 15) {
++  if (nmatches < 8) {
+     cout << "TRACK_REF_KF: Less than 15 matches!!\n";
+     return false;
+   }
+@@ -3004,8 +3013,8 @@
+        System::IMU_MONOCULAR))  // MODIFICATION_2, originally
+                                 // ((((mnMatchesInliers<75) &&
+                                 // (mnMatchesInliers>15)) ||
+-                                // mState==RECENTLY_LOST) && ((mSensor ==
+-                                // System::IMU_MONOCULAR)))
++                                // mState==RECENTLY_LOST) && ((mSensor
++                                // == System::IMU_MONOCULAR)))
+     c4 = true;
+   else
+     c4 = false;
+@@ -3436,7 +3445,7 @@
+     else {
+       int nmatches =
+           matcher.SearchByBoW(pKF, mCurrentFrame, vvpMapPointMatches[i]);
+-      if (nmatches < 15) {
++      if (nmatches < 8) {
+         vbDiscarded[i] = true;
+         continue;
+       } else {
+@@ -3451,6 +3460,9 @@
+     }
+   }
+ 
++  cout << "[DEBUG] Relocalization: " << nKFs << " candidates from DB -> "
++       << nCandidates << " passed SearchByBoW" << endl;
++
+   // Alternatively perform some iterations of P4P RANSAC
+   // Until we found a camera pose supported by enough inliers
+   bool bMatch = false;
+@@ -3494,6 +3506,8 @@
+         }
+ 
+         int nGood = Optimizer::PoseOptimization(&mCurrentFrame);
++        cout << "[DEBUG] Reloc PnP candidate " << i
++             << ": nGood after first opt = " << nGood << endl;
+ 
+         if (nGood < 10) continue;
+ 
+@@ -3503,27 +3517,37 @@
+ 
+         // If few inliers, search by projection in a coarse window and optimize
+         // again
+-        if (nGood < 50) {
++        if (nGood < 30) {
+           int nadditional = matcher2.SearchByProjection(
+               mCurrentFrame, vpCandidateKFs[i], sFound, 10, 100);
++          cout << "[DEBUG] Reloc PnP candidate " << i
++               << ": SearchByProjection 1 found " << nadditional
++               << " additional matches" << endl;
+ 
+-          if (nadditional + nGood >= 50) {
++          if (nadditional + nGood >= 30) {
+             nGood = Optimizer::PoseOptimization(&mCurrentFrame);
++            cout << "[DEBUG] Reloc PnP candidate " << i
++                 << ": nGood after second opt = " << nGood << endl;
+ 
+             // If many inliers but still not enough, search by projection again
+             // in a narrower window the camera has been already optimized with
+             // many points
+-            if (nGood > 30 && nGood < 50) {
++            if (nGood > 20 && nGood < 30) {
+               sFound.clear();
+               for (int ip = 0; ip < mCurrentFrame.N; ip++)
+                 if (mCurrentFrame.mvpMapPoints[ip])
+                   sFound.insert(mCurrentFrame.mvpMapPoints[ip]);
+               nadditional = matcher2.SearchByProjection(
+                   mCurrentFrame, vpCandidateKFs[i], sFound, 3, 64);
++              cout << "[DEBUG] Reloc PnP candidate " << i
++                   << ": SearchByProjection 2 found " << nadditional
++                   << " additional matches" << endl;
+ 
+               // Final optimization
+-              if (nGood + nadditional >= 50) {
++              if (nGood + nadditional >= 30) {
+                 nGood = Optimizer::PoseOptimization(&mCurrentFrame);
++                cout << "[DEBUG] Reloc PnP candidate " << i
++                     << ": nGood after final opt = " << nGood << endl;
+ 
+                 for (int io = 0; io < mCurrentFrame.N; io++)
+                   if (mCurrentFrame.mvbOutlier[io])
+@@ -3534,7 +3558,7 @@
+         }
+ 
+         // If the pose is supported by enough inliers stop ransacs and continue
+-        if (nGood >= 50) {
++        if (nGood >= 30) {
+           bMatch = true;
+           break;
+         }
+--- a/ORB_SLAM3/src/Map.cc
++++ b/ORB_SLAM3/src/Map.cc
+@@ -321,22 +321,38 @@
+ 
+ void Map::PreSave(std::set<GeometricCamera*>& spCams) {
+   int nMPWithoutObs = 0;
+-  for (MapPoint* pMPi : mspMapPoints) {
+-    if (!pMPi || pMPi->isBad()) continue;
+ 
+-    if (pMPi->GetObservations().size() == 0) {
+-      nMPWithoutObs++;
+-    }
+-    map<KeyFrame*, std::tuple<int, int>> mpObs = pMPi->GetObservations();
+-    for (map<KeyFrame*, std::tuple<int, int>>::iterator it = mpObs.begin(),
+-                                                        end = mpObs.end();
+-         it != end; ++it) {
+-      if (it->first->GetMap() != this || it->first->isBad()) {
+-        pMPi->EraseObservation(it->first);
++  // FIX: snapshot to prevent iterator invalidation via
++  // EraseObservation->SetBadFlag->EraseMapPoint
++  std::vector<MapPoint*> vpMapPointsSnap(mspMapPoints.begin(),
++                                         mspMapPoints.end());
++  for (MapPoint* pMPi : vpMapPointsSnap) {
++    if (!pMPi) continue;
++    try {
++      if (pMPi->isBad()) continue;
++      if (pMPi->GetObservations().size() == 0) {
++        nMPWithoutObs++;
++        continue;
++      }
++      map<KeyFrame*, std::tuple<int, int>> mpObs = pMPi->GetObservations();
++      vector<KeyFrame*> toErase;
++      for (auto it = mpObs.begin(), end = mpObs.end(); it != end; ++it) {
++        if (!it->first || it->first->isBad() || it->first->GetMap() != this)
++          toErase.push_back(it->first);
+       }
++      for (KeyFrame* pKF : toErase) {
++        try {
++          pMPi->EraseObservation(pKF);
++        } catch (...) {
++        }
++      }
++    } catch (...) {
++      std::cerr << "[PreSave] skipping bad MapPoint" << std::endl;
+     }
+   }
+ 
++  std::cerr << "[DBG] Map::PreSave phase1 done (MapPoint obs cleanup)"
++            << std::endl;
+   // Saves the id of KF origins
+   mvBackupKeyFrameOriginsId.clear();
+   mvBackupKeyFrameOriginsId.reserve(mvpKeyFrameOrigins.size());
+@@ -344,22 +360,34 @@
+     mvBackupKeyFrameOriginsId.push_back(mvpKeyFrameOrigins[i]->mnId);
+   }
+ 
++  std::cerr << "[DBG] Map::PreSave phase2 done (KF origins)" << std::endl;
+   // Backup of MapPoints
+   mvpBackupMapPoints.clear();
+-  for (MapPoint* pMPi : mspMapPoints) {
++  // FIX: snapshot to prevent iterator invalidation
++  std::vector<MapPoint*> vpMapPointsSnap2(mspMapPoints.begin(),
++                                          mspMapPoints.end());
++  for (MapPoint* pMPi : vpMapPointsSnap2) {
+     if (!pMPi || pMPi->isBad()) continue;
+ 
+     mvpBackupMapPoints.push_back(pMPi);
+     pMPi->PreSave(mspKeyFrames, mspMapPoints);
+   }
+ 
++  std::cerr << "[DBG] Map::PreSave phase3 done (MapPoints backup)" << std::endl;
+   // Backup of KeyFrames
+   mvpBackupKeyFrames.clear();
+-  for (KeyFrame* pKFi : mspKeyFrames) {
++  // FIX: snapshot to prevent iterator invalidation
++  std::vector<KeyFrame*> vpKeyFramesSnap(mspKeyFrames.begin(),
++                                         mspKeyFrames.end());
++  for (KeyFrame* pKFi : vpKeyFramesSnap) {
+     if (!pKFi || pKFi->isBad()) continue;
+ 
+-    mvpBackupKeyFrames.push_back(pKFi);
+-    pKFi->PreSave(mspKeyFrames, mspMapPoints, spCams);
++    try {
++      mvpBackupKeyFrames.push_back(pKFi);
++      pKFi->PreSave(mspKeyFrames, mspMapPoints, spCams);
++    } catch (...) {
++      std::cerr << "[PreSave] skipping bad KeyFrame" << std::endl;
++    }
+   }
+ 
+   mnBackupKFinitialID = -1;
+@@ -384,7 +412,11 @@
+             std::inserter(mspKeyFrames, mspKeyFrames.begin()));
+ 
+   map<long unsigned int, MapPoint*> mpMapPointId;
+-  for (MapPoint* pMPi : mspMapPoints) {
++  // FIX: snapshot to prevent iterator invalidation via
++  // EraseObservation->SetBadFlag->EraseMapPoint
++  std::vector<MapPoint*> vpMapPointsSnap(mspMapPoints.begin(),
++                                         mspMapPoints.end());
++  for (MapPoint* pMPi : vpMapPointsSnap) {
+     if (!pMPi || pMPi->isBad()) continue;
+ 
+     pMPi->UpdateMap(this);
+@@ -402,7 +434,11 @@
+   }
+ 
+   // References reconstruction between different instances
+-  for (MapPoint* pMPi : mspMapPoints) {
++  // FIX: snapshot to prevent iterator invalidation via
++  // EraseObservation->SetBadFlag->EraseMapPoint
++  std::vector<MapPoint*> vpMapPointsSnap2(mspMapPoints.begin(),
++                                          mspMapPoints.end());
++  for (MapPoint* pMPi : vpMapPointsSnap2) {
+     if (!pMPi || pMPi->isBad()) continue;
+ 
+     pMPi->PostLoad(mpKeyFrameId, mpMapPointId);
+--- a/ORB_SLAM3/src/KeyFrameDatabase.cc
++++ b/ORB_SLAM3/src/KeyFrameDatabase.cc
+@@ -37,6 +37,9 @@
+ void KeyFrameDatabase::add(KeyFrame* pKF) {
+   unique_lock<mutex> lock(mMutex);
+ 
++  cout << "[DEBUG] DB add(): KF " << pKF->mnId
++       << " | BoW size: " << pKF->mBowVec.size() << endl;
++
+   for (DBoW2::BowVector::const_iterator vit = pKF->mBowVec.begin(),
+                                         vend = pKF->mBowVec.end();
+        vit != vend; vit++)
+@@ -72,8 +75,8 @@
+   unique_lock<mutex> lock(mMutex);
+ 
+   // Erase elements in the Inverse File for the entry
+-  for (std::vector<list<KeyFrame*> >::iterator vit = mvInvertedFile.begin(),
+-                                               vend = mvInvertedFile.end();
++  for (std::vector<list<KeyFrame*>>::iterator vit = mvInvertedFile.begin(),
++                                              vend = mvInvertedFile.end();
+        vit != vend; vit++) {
+     // List of keyframes that share the word
+     list<KeyFrame*>& lKFs = *vit;
+@@ -129,7 +132,7 @@
+ 
+   if (lKFsSharingWords.empty()) return vector<KeyFrame*>();
+ 
+-  list<pair<float, KeyFrame*> > lScoreAndMatch;
++  list<pair<float, KeyFrame*>> lScoreAndMatch;
+ 
+   // Only compare against those keyframes that share enough words
+   int maxCommonWords = 0;
+@@ -163,12 +166,12 @@
+ 
+   if (lScoreAndMatch.empty()) return vector<KeyFrame*>();
+ 
+-  list<pair<float, KeyFrame*> > lAccScoreAndMatch;
++  list<pair<float, KeyFrame*>> lAccScoreAndMatch;
+   float bestAccScore = minScore;
+ 
+   // Lets now accumulate score by covisibility
+-  for (list<pair<float, KeyFrame*> >::iterator it = lScoreAndMatch.begin(),
+-                                               itend = lScoreAndMatch.end();
++  for (list<pair<float, KeyFrame*>>::iterator it = lScoreAndMatch.begin(),
++                                              itend = lScoreAndMatch.end();
+        it != itend; it++) {
+     KeyFrame* pKFi = it->second;
+     vector<KeyFrame*> vpNeighs = pKFi->GetBestCovisibilityKeyFrames(10);
+@@ -201,8 +204,8 @@
+   vector<KeyFrame*> vpLoopCandidates;
+   vpLoopCandidates.reserve(lAccScoreAndMatch.size());
+ 
+-  for (list<pair<float, KeyFrame*> >::iterator it = lAccScoreAndMatch.begin(),
+-                                               itend = lAccScoreAndMatch.end();
++  for (list<pair<float, KeyFrame*>>::iterator it = lAccScoreAndMatch.begin(),
++                                              itend = lAccScoreAndMatch.end();
+        it != itend; it++) {
+     if (it->first > minScoreToRetain) {
+       KeyFrame* pKFi = it->second;
+@@ -264,7 +267,7 @@
+   if (lKFsSharingWordsLoop.empty() && lKFsSharingWordsMerge.empty()) return;
+ 
+   if (!lKFsSharingWordsLoop.empty()) {
+-    list<pair<float, KeyFrame*> > lScoreAndMatch;
++    list<pair<float, KeyFrame*>> lScoreAndMatch;
+ 
+     // Only compare against those keyframes that share enough words
+     int maxCommonWords = 0;
+@@ -297,12 +300,12 @@
+     }
+ 
+     if (!lScoreAndMatch.empty()) {
+-      list<pair<float, KeyFrame*> > lAccScoreAndMatch;
++      list<pair<float, KeyFrame*>> lAccScoreAndMatch;
+       float bestAccScore = minScore;
+ 
+       // Lets now accumulate score by covisibility
+-      for (list<pair<float, KeyFrame*> >::iterator it = lScoreAndMatch.begin(),
+-                                                   itend = lScoreAndMatch.end();
++      for (list<pair<float, KeyFrame*>>::iterator it = lScoreAndMatch.begin(),
++                                                  itend = lScoreAndMatch.end();
+            it != itend; it++) {
+         KeyFrame* pKFi = it->second;
+         vector<KeyFrame*> vpNeighs = pKFi->GetBestCovisibilityKeyFrames(10);
+@@ -334,7 +337,7 @@
+       set<KeyFrame*> spAlreadyAddedKF;
+       vpLoopCand.reserve(lAccScoreAndMatch.size());
+ 
+-      for (list<pair<float, KeyFrame*> >::iterator
++      for (list<pair<float, KeyFrame*>>::iterator
+                it = lAccScoreAndMatch.begin(),
+                itend = lAccScoreAndMatch.end();
+            it != itend; it++) {
+@@ -350,7 +353,7 @@
+   }
+ 
+   if (!lKFsSharingWordsMerge.empty()) {
+-    list<pair<float, KeyFrame*> > lScoreAndMatch;
++    list<pair<float, KeyFrame*>> lScoreAndMatch;
+ 
+     // Only compare against those keyframes that share enough words
+     int maxCommonWords = 0;
+@@ -383,12 +386,12 @@
+     }
+ 
+     if (!lScoreAndMatch.empty()) {
+-      list<pair<float, KeyFrame*> > lAccScoreAndMatch;
++      list<pair<float, KeyFrame*>> lAccScoreAndMatch;
+       float bestAccScore = minScore;
+ 
+       // Lets now accumulate score by covisibility
+-      for (list<pair<float, KeyFrame*> >::iterator it = lScoreAndMatch.begin(),
+-                                                   itend = lScoreAndMatch.end();
++      for (list<pair<float, KeyFrame*>>::iterator it = lScoreAndMatch.begin(),
++                                                  itend = lScoreAndMatch.end();
+            it != itend; it++) {
+         KeyFrame* pKFi = it->second;
+         vector<KeyFrame*> vpNeighs = pKFi->GetBestCovisibilityKeyFrames(10);
+@@ -420,7 +423,7 @@
+       set<KeyFrame*> spAlreadyAddedKF;
+       vpMergeCand.reserve(lAccScoreAndMatch.size());
+ 
+-      for (list<pair<float, KeyFrame*> >::iterator
++      for (list<pair<float, KeyFrame*>>::iterator
+                it = lAccScoreAndMatch.begin(),
+                itend = lAccScoreAndMatch.end();
+            it != itend; it++) {
+@@ -499,7 +502,7 @@
+     minCommonWords = nMinWords;
+   }
+ 
+-  list<pair<float, KeyFrame*> > lScoreAndMatch;
++  list<pair<float, KeyFrame*>> lScoreAndMatch;
+ 
+   int nscores = 0;
+ 
+@@ -519,12 +522,12 @@
+ 
+   if (lScoreAndMatch.empty()) return;
+ 
+-  list<pair<float, KeyFrame*> > lAccScoreAndMatch;
++  list<pair<float, KeyFrame*>> lAccScoreAndMatch;
+   float bestAccScore = 0;
+ 
+   // Lets now accumulate score by covisibility
+-  for (list<pair<float, KeyFrame*> >::iterator it = lScoreAndMatch.begin(),
+-                                               itend = lScoreAndMatch.end();
++  for (list<pair<float, KeyFrame*>>::iterator it = lScoreAndMatch.begin(),
++                                              itend = lScoreAndMatch.end();
+        it != itend; it++) {
+     KeyFrame* pKFi = it->second;
+     vector<KeyFrame*> vpNeighs = pKFi->GetBestCovisibilityKeyFrames(10);
+@@ -553,8 +556,8 @@
+   set<KeyFrame*> spAlreadyAddedKF;
+   vpLoopCand.reserve(lAccScoreAndMatch.size());
+   vpMergeCand.reserve(lAccScoreAndMatch.size());
+-  for (list<pair<float, KeyFrame*> >::iterator it = lAccScoreAndMatch.begin(),
+-                                               itend = lAccScoreAndMatch.end();
++  for (list<pair<float, KeyFrame*>>::iterator it = lAccScoreAndMatch.begin(),
++                                              itend = lAccScoreAndMatch.end();
+        it != itend; it++) {
+     const float& si = it->first;
+     if (si > minScoreToRetain) {
+@@ -622,7 +625,7 @@
+ 
+   int minCommonWords = maxCommonWords * 0.8f;
+ 
+-  list<pair<float, KeyFrame*> > lScoreAndMatch;
++  list<pair<float, KeyFrame*>> lScoreAndMatch;
+ 
+   int nscores = 0;
+ 
+@@ -642,12 +645,12 @@
+ 
+   if (lScoreAndMatch.empty()) return;
+ 
+-  list<pair<float, KeyFrame*> > lAccScoreAndMatch;
++  list<pair<float, KeyFrame*>> lAccScoreAndMatch;
+   float bestAccScore = 0;
+ 
+   // Lets now accumulate score by covisibility
+-  for (list<pair<float, KeyFrame*> >::iterator it = lScoreAndMatch.begin(),
+-                                               itend = lScoreAndMatch.end();
++  for (list<pair<float, KeyFrame*>>::iterator it = lScoreAndMatch.begin(),
++                                              itend = lScoreAndMatch.end();
+        it != itend; it++) {
+     KeyFrame* pKFi = it->second;
+     vector<KeyFrame*> vpNeighs = pKFi->GetBestCovisibilityKeyFrames(10);
+@@ -677,7 +680,7 @@
+   vpMergeCand.reserve(nNumCandidates);
+   set<KeyFrame*> spAlreadyAddedKF;
+   int i = 0;
+-  list<pair<float, KeyFrame*> >::iterator it = lAccScoreAndMatch.begin();
++  list<pair<float, KeyFrame*>>::iterator it = lAccScoreAndMatch.begin();
+   while (i < lAccScoreAndMatch.size() &&
+          (vpLoopCand.size() < nNumCandidates ||
+           vpMergeCand.size() < nNumCandidates)) {
+@@ -704,6 +707,20 @@
+                                                                    Map* pMap) {
+   list<KeyFrame*> lKFsSharingWords;
+ 
++  cout << "\n[DEBUG] DetectReloc(): Frame " << F->mnId
++       << " | mBowVec size: " << F->mBowVec.size() << endl;
++  int active_words = 0;
++  int total_kfs_in_index = 0;
++  for (size_t i = 0; i < mvInvertedFile.size(); i++) {
++    if (!mvInvertedFile[i].empty()) {
++      active_words++;
++      total_kfs_in_index += mvInvertedFile[i].size();
++    }
++  }
++  cout << "[DEBUG] mvInvertedFile total size: " << mvInvertedFile.size()
++       << ", words with matches: " << active_words
++       << ", total KF references: " << total_kfs_in_index << endl;
++
+   // Search all keyframes that share a word with current frame
+   {
+     unique_lock<mutex> lock(mMutex);
+@@ -725,7 +742,13 @@
+       }
+     }
+   }
+-  if (lKFsSharingWords.empty()) return vector<KeyFrame*>();
++  if (lKFsSharingWords.empty()) {
++    cout << "[DEBUG] DetectReloc: 0 KFs share words" << endl;
++    return vector<KeyFrame*>();
++  }
++
++  cout << "[DEBUG] DetectReloc: " << lKFsSharingWords.size()
++       << " KFs extracted from inverted file." << endl;
+ 
+   // Only compare against those keyframes that share enough words
+   int maxCommonWords = 0;
+@@ -738,7 +761,7 @@
+ 
+   int minCommonWords = maxCommonWords * 0.8f;
+ 
+-  list<pair<float, KeyFrame*> > lScoreAndMatch;
++  list<pair<float, KeyFrame*>> lScoreAndMatch;
+ 
+   int nscores = 0;
+ 
+@@ -756,14 +779,21 @@
+     }
+   }
+ 
+-  if (lScoreAndMatch.empty()) return vector<KeyFrame*>();
++  if (lScoreAndMatch.empty()) {
++    cout << "[DEBUG] DetectReloc: 0 KFs passed minCommonWords ("
++         << minCommonWords << ")" << endl;
++    return vector<KeyFrame*>();
++  }
++
++  cout << "[DEBUG] DetectReloc: " << lScoreAndMatch.size()
++       << " KFs passed minCommonWords (" << minCommonWords << ")" << endl;
+ 
+-  list<pair<float, KeyFrame*> > lAccScoreAndMatch;
++  list<pair<float, KeyFrame*>> lAccScoreAndMatch;
+   float bestAccScore = 0;
+ 
+   // Lets now accumulate score by covisibility
+-  for (list<pair<float, KeyFrame*> >::iterator it = lScoreAndMatch.begin(),
+-                                               itend = lScoreAndMatch.end();
++  for (list<pair<float, KeyFrame*>>::iterator it = lScoreAndMatch.begin(),
++                                              itend = lScoreAndMatch.end();
+        it != itend; it++) {
+     KeyFrame* pKFi = it->second;
+     vector<KeyFrame*> vpNeighs = pKFi->GetBestCovisibilityKeyFrames(10);
+@@ -792,13 +822,14 @@
+   set<KeyFrame*> spAlreadyAddedKF;
+   vector<KeyFrame*> vpRelocCandidates;
+   vpRelocCandidates.reserve(lAccScoreAndMatch.size());
+-  for (list<pair<float, KeyFrame*> >::iterator it = lAccScoreAndMatch.begin(),
+-                                               itend = lAccScoreAndMatch.end();
++  for (list<pair<float, KeyFrame*>>::iterator it = lAccScoreAndMatch.begin(),
++                                              itend = lAccScoreAndMatch.end();
+        it != itend; it++) {
+     const float& si = it->first;
+     if (si > minScoreToRetain) {
+       KeyFrame* pKFi = it->second;
+-      if (pKFi->GetMap() != pMap) continue;
++      if (false)  // disabled: map filter breaks relocalization after atlas load
++        continue;
+       if (!spAlreadyAddedKF.count(pKFi)) {
+         vpRelocCandidates.push_back(pKFi);
+         spAlreadyAddedKF.insert(pKFi);
+--- a/ORB_SLAM3/src/Atlas.cc
++++ b/ORB_SLAM3/src/Atlas.cc
+@@ -255,6 +255,8 @@
+ }
+ 
+ void Atlas::PreSave() {
++  std::cout << "[DBG] Atlas::PreSave start, maps=" << mspMaps.size()
++            << std::endl;
+   if (mpCurrentMap) {
+     if (!mspMaps.empty() && mnLastInitKFidMap < mpCurrentMap->GetMaxKFid())
+       mnLastInitKFidMap = mpCurrentMap->GetMaxKFid() +
+@@ -269,7 +271,10 @@
+   std::copy(mspMaps.begin(), mspMaps.end(), std::back_inserter(mvpBackupMaps));
+   sort(mvpBackupMaps.begin(), mvpBackupMaps.end(), compFunctor());
+ 
+-  std::set<GeometricCamera*> spCams(mvpCameras.begin(), mvpCameras.end());
++  std::set<GeometricCamera*> spCams;
++  for (GeometricCamera* pCam : mvpCameras) {
++    if (pCam) spCams.insert(pCam);
++  }
+   for (Map* pMi : mvpBackupMaps) {
+     if (!pMi || pMi->IsBad()) continue;
+ 
+@@ -278,7 +283,12 @@
+       SetMapBad(pMi);
+       continue;
+     }
++    std::cout << "[DBG] Map::PreSave starting for map id=" << pMi->GetId()
++              << " kfs=" << pMi->GetAllKeyFrames().size()
++              << " mps=" << pMi->GetAllMapPoints().size() << std::endl;
+     pMi->PreSave(spCams);
++    std::cout << "[DBG] Map::PreSave done for map id=" << pMi->GetId()
++              << std::endl;
+   }
+   RemoveBadMaps();
+ }
+--- a/ORB_SLAM3/src/KeyFrame.cc
++++ b/ORB_SLAM3/src/KeyFrame.cc
+@@ -909,12 +909,20 @@
+ 
+   // Camera data
+   mnBackupIdCamera = -1;
+-  if (mpCamera && spCam.find(mpCamera) != spCam.end())
+-    mnBackupIdCamera = mpCamera->GetId();
++  if (mpCamera) {
++    try {
++      mnBackupIdCamera = mpCamera->GetId();
++    } catch (...) {
++    }
++  }
+ 
+   mnBackupIdCamera2 = -1;
+-  if (mpCamera2 && spCam.find(mpCamera2) != spCam.end())
+-    mnBackupIdCamera2 = mpCamera2->GetId();
++  if (mpCamera2) {
++    try {
++      mnBackupIdCamera2 = mpCamera2->GetId();
++    } catch (...) {
++    }
++  }
+ 
+   // Inertial data
+   mBackupPrevKFId = -1;
+--- a/ORB_SLAM3/include/LoopClosing.h
++++ b/ORB_SLAM3/include/LoopClosing.h
+@@ -67,6 +67,10 @@
+   // This function will run in a separate thread
+   void RunGlobalBundleAdjustment(Map* pActiveMap, unsigned long nLoopKF);
+ 
++  void StopGBA() {
++    unique_lock<std::mutex> lock(mMutexGBA);
++    mbStopGBA = true;
++  }
+   bool isRunningGBA() {
+     unique_lock<std::mutex> lock(mMutexGBA);
+     return mbRunningGBA;
+--- a/ORB_SLAM3/CMakeLists.txt
++++ b/ORB_SLAM3/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-cmake_minimum_required(VERSION 2.8)
++cmake_minimum_required(VERSION 3.5)
+ project(ORB_SLAM3)
+ 
+ IF(NOT CMAKE_BUILD_TYPE)
+@@ -8,20 +8,20 @@
+ MESSAGE("Build type: " ${CMAKE_BUILD_TYPE})
+ 
+ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -Wall   -O3")
+-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall   -O3")
+-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
+-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-ambiguous-reversed-operator -Wno-error -Wall   -O3")
++set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native -Wno-error -DEIGEN_DONT_VECTORIZE")
++set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native -Wno-error -DEIGEN_DONT_VECTORIZE")
+ 
+ # Check C++11 or C++0x support
+ include(CheckCXXCompilerFlag)
+-CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
++CHECK_CXX_COMPILER_FLAG("-std=c++14" COMPILER_SUPPORTS_CXX11)
+ CHECK_CXX_COMPILER_FLAG("-std=c++0x" COMPILER_SUPPORTS_CXX0X)
+ if(COMPILER_SUPPORTS_CXX11)
+-   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
++   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-ambiguous-reversed-operator -Wno-error -std=c++14")
+    add_definitions(-DCOMPILEDWITHC11)
+-   message(STATUS "Using flag -std=c++11.")
++   message(STATUS "Using flag -std=c++14.")
+ elseif(COMPILER_SUPPORTS_CXX0X)
+-   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
++   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-ambiguous-reversed-operator -Wno-error -std=c++0x")
+    add_definitions(-DCOMPILEDWITHC0X)
+    message(STATUS "Using flag -std=c++0x.")
+ else()
+@@ -38,7 +38,7 @@
+ MESSAGE("OPENCV VERSION:")
+ MESSAGE(${OpenCV_VERSION})
+ 
+-find_package(Eigen3 3.1.0 REQUIRED)
++find_package(Eigen3 REQUIRED HINTS /usr/local/eigen34/share/eigen3/cmake)
+ find_package(Pangolin REQUIRED)
+ find_package(realsense2)
+ 
+--- a/ORB_SLAM3/Thirdparty/DBoW2/CMakeLists.txt
++++ b/ORB_SLAM3/Thirdparty/DBoW2/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-cmake_minimum_required(VERSION 2.8)
++cmake_minimum_required(VERSION 3.5)
+ project(DBoW2)
+ 
+ if(NOT CMAKE_BUILD_TYPE)
+--- a/ORB_SLAM3/Thirdparty/Sophus/CMakeLists.txt
++++ b/ORB_SLAM3/Thirdparty/Sophus/CMakeLists.txt
+@@ -1,3 +1,4 @@
++cmake_policy(SET CMP0000 NEW)
+ cmake_minimum_required(VERSION 3.4)
+ project(Sophus VERSION 1.1.0)
+ 
+--- a/ORB_SLAM3/Thirdparty/g2o/CMakeLists.txt
++++ b/ORB_SLAM3/Thirdparty/g2o/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
++cmake_minimum_required(VERSION 3.5)
+ SET(CMAKE_LEGACY_CYGWIN_WIN32 0)
+ 
+ PROJECT(g2o)
+@@ -69,7 +69,7 @@
+ 
+ # Find Eigen3
+ SET(EIGEN3_INCLUDE_DIR ${G2O_EIGEN3_INCLUDE})
+-FIND_PACKAGE(Eigen3 3.1.0 REQUIRED)
++find_package(Eigen3 REQUIRED HINTS /usr/local/eigen34/share/eigen3/cmake)
+ IF(EIGEN3_FOUND)
+   SET(G2O_EIGEN3_INCLUDE ${EIGEN3_INCLUDE_DIR} CACHE PATH "Directory of Eigen3")
+ ELSE(EIGEN3_FOUND)
